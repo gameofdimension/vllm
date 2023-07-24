@@ -34,16 +34,16 @@ class ModelConfig:
     """
 
     def __init__(
-            self,
-            model: str,
-            tokenizer: str,
-            tokenizer_mode: str,
-            trust_remote_code: bool,
-            download_dir: Optional[str],
-            use_np_weights: bool,
-            use_dummy_weights: bool,
-            dtype: str,
-            seed: int,
+        self,
+        model: str,
+        tokenizer: str,
+        tokenizer_mode: str,
+        trust_remote_code: bool,
+        download_dir: Optional[str],
+        use_np_weights: bool,
+        use_dummy_weights: bool,
+        dtype: str,
+        seed: int,
     ) -> None:
         self.model = model
         self.tokenizer = tokenizer
@@ -67,8 +67,8 @@ class ModelConfig:
         self.tokenizer_mode = tokenizer_mode
 
     def verify_with_parallel_config(
-            self,
-            parallel_config: "ParallelConfig",
+        self,
+        parallel_config: "ParallelConfig",
     ) -> None:
         total_num_attention_heads = self.hf_config.num_attention_heads
         tensor_parallel_size = parallel_config.tensor_parallel_size
@@ -127,10 +127,10 @@ class CacheConfig:
     """
 
     def __init__(
-            self,
-            block_size: int,
-            gpu_memory_utilization: float,
-            swap_space: int,
+        self,
+        block_size: int,
+        gpu_memory_utilization: float,
+        swap_space: int,
     ) -> None:
         self.block_size = block_size
         self.gpu_memory_utilization = gpu_memory_utilization
@@ -148,8 +148,8 @@ class CacheConfig:
                 f"{self.gpu_memory_utilization}.")
 
     def verify_with_parallel_config(
-            self,
-            parallel_config: "ParallelConfig",
+        self,
+        parallel_config: "ParallelConfig",
     ) -> None:
         total_cpu_memory = get_cpu_memory()
         # FIXME(woosuk): Here, it is assumed that the GPUs in a tensor parallel
@@ -178,10 +178,10 @@ class ParallelConfig:
     """
 
     def __init__(
-            self,
-            pipeline_parallel_size: int,
-            tensor_parallel_size: int,
-            worker_use_ray: bool,
+        self,
+        pipeline_parallel_size: int,
+        tensor_parallel_size: int,
+        worker_use_ray: bool,
     ) -> None:
         self.pipeline_parallel_size = pipeline_parallel_size
         self.tensor_parallel_size = tensor_parallel_size
@@ -227,8 +227,8 @@ _STR_DTYPE_TO_TORCH_DTYPE = {
 
 
 def _get_and_verify_dtype(
-        config: PretrainedConfig,
-        dtype: str,
+    config: PretrainedConfig,
+    dtype: str,
 ) -> torch.dtype:
     # NOTE: getattr(config, "torch_dtype", torch.float32) is not correct
     # because config.torch_dtype can be None.

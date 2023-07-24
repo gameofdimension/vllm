@@ -13,6 +13,8 @@ from transformers.utils import logging
 from vllm.model_executor.input_metadata import InputMetadata
 from vllm.model_executor.layers.attention import PagedAttention
 from vllm.model_executor.layers.sampler import Sampler
+from vllm.model_executor.parallel_utils.parallel_state import get_tensor_model_parallel_rank
+from vllm.model_executor.weight_utils import load_tensor_parallel_weights, hf_model_weights_iterator
 from vllm.sequence import SequenceOutputs
 
 logger = logging.get_logger(__name__)
@@ -544,3 +546,28 @@ class ChatGLMModel(nn.Module):
         next_tokens = self.sampler(self.lm_head.weight, hidden_states,
                                    input_metadata)
         return next_tokens
+
+    def load_weights(
+            self,
+            model_name_or_path: str,
+            cache_dir: Optional[str] = None,
+            use_np_cache: bool = False,
+    ):
+        tensor_model_parallel_rank = get_tensor_model_parallel_rank()
+        state_dict = self.state_dict()
+
+        for name, loaded_weight in hf_model_weights_iterator(
+                model_name_or_path, cache_dir, use_np_cache
+        ):
+            if "rotary_emb.inv_freq" in name:
+                continue
+
+            param = state_dict[name]
+            load_tensor_parallel_weights(
+                param,
+                loaded_weight,
+                name,
+                self._column_parallel_weights,
+                self._row_parallel_weights,
+                tensor_model_parallel_rank,
+            )

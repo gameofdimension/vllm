@@ -1,5 +1,4 @@
 """ PyTorch ChatGLM model. """
-import sys
 from typing import Optional, Tuple, List, Dict
 
 import torch
@@ -555,6 +554,21 @@ class ChatGLMModel(nn.Module):
             input_metadata=input_metadata,
             cache_events=cache_events,
         )
+        """
+        Prompt: 'Hello, my name is', Generated text: 'I. It is a specific product of the software engineering and the more than ever'
+        Prompt: 'The president of the United States is', Generated text: 'Io子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜子宫内膜'
+        Prompt: 'The capital of France is', Generated text: 'I would- sturdy sturdy sturdy sturdy sturdy sturdy sturdy sturdy sturdy sturdy sturdy sturdy sturdy'
+        Prompt: 'The future of AI is', Generated text: "I's母親親親親和之国之国之国之国之国之国之国"
+        Prompt: '[Round 0]\n问：你好\n答：', Generated text: 'Hello Hello Hello!'
+        
+        虽然跑通了，结果看起来相对诡异，另外看到显存消耗高峰达到 40G+，这超出预期太多
+        输出诡异的问题可能还是自注意力部分改的太激进了，清华的这个模型独有的一些 trick 很多，比如
+        attention 实现中缩放参数居然还用到了层编号信息。因此按标准自注意力的假定去改的话可能会改错，
+        要想做对还是要读懂源码，确认下跟标准自注意力差异有哪些，同时看下能否跟 vllm 现有的设施做下适配。
+        其实已经做了一些适配了，比如这个模型使用了 2D position ，因此不能使用 vllm 的选择旋转位置
+        编码注意力，虽然其标榜自己用了旋转位置编码，因此只能用标准自注意力适配，在调用之前需要做旋转变换
+        如果差异大到无法用现有设施适配，那可能需要改 vllm 底层，动作就大了
+        """
 
         # hidden_states.transpose(0, 1)
         next_tokens = self.sampler(self.lm_head.weight, hidden_states,

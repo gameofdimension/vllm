@@ -468,18 +468,19 @@ class RealChatGLMModel(nn.Module):
             cache_events: Optional[List[torch.cuda.Event]],
     ) -> torch.Tensor:
 
+        assert len(input_ids.size()) == 1
         inputs_embeds = self.word_embeddings(input_ids)
 
         def build_positions():
             MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
-            seqs = input_ids.tolist()
+            seq = input_ids.tolist()
 
             mask_positions, use_gmasks = [], []
-            for seq in seqs:
-                mask_token = gMASK if gMASK in seq else MASK
-                use_gmask = mask_token == gMASK
-                mask_positions.append(seq.index(mask_token))
-                use_gmasks.append(use_gmask)
+
+            mask_token = gMASK if gMASK in seq else MASK
+            use_gmask = mask_token == gMASK
+            mask_positions.append(seq.index(mask_token))
+            use_gmasks.append(use_gmask)
 
             position_ids = self.get_position_ids(
                 input_ids,

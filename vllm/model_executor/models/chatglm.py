@@ -1,5 +1,5 @@
 """ PyTorch ChatGLM model. """
-
+import sys
 from typing import Optional, Tuple, List, Dict
 
 import torch
@@ -19,6 +19,12 @@ from vllm.sequence import SequenceOutputs
 
 logger = logging.get_logger(__name__)
 KVCache = Tuple[torch.Tensor, torch.Tensor]
+
+if sys.platform != 'darwin':
+    torch._C._jit_set_profiling_mode(False)
+    torch._C._jit_set_profiling_executor(False)
+    torch._C._jit_override_can_fuse_on_cpu(True)
+    torch._C._jit_override_can_fuse_on_gpu(True)
 
 
 @torch.jit.script

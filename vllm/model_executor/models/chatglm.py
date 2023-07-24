@@ -494,8 +494,8 @@ class RealChatGLMModel(nn.Module):
     ) -> torch.Tensor:
         if positions is None:
             input_ids, positions = self.build_positions(input_ids)
-        inputs_embeds = self.word_embeddings(input_ids)
-        hidden_states = inputs_embeds.transpose(0, 1)
+        hidden_states = self.word_embeddings(input_ids)
+        # hidden_states = inputs_embeds.transpose(0, 1)
         for i, layer in enumerate(self.layers):
             if cache_events is None:
                 cache_event = None
@@ -550,7 +550,7 @@ class ChatGLMModel(nn.Module):
             cache_events=cache_events,
         )
 
-        hidden_states.transpose(0, 1)
+        # hidden_states.transpose(0, 1)
         next_tokens = self.sampler(self.lm_head.weight, hidden_states,
                                    input_metadata)
         return next_tokens

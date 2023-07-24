@@ -220,7 +220,7 @@ class SelfAttention(torch.nn.Module):
             query_layer = torch.concat([q1, q2], dim=(q1.ndim - 1))
             key_layer = torch.concat([k1, k2], dim=(k1.ndim - 1))
         else:
-            position_ids = positions.transpose(0, 1)
+            position_ids = positions
             cos, sin = self.rotary_emb(value_layer, seq_len=position_ids.max() + 1)
             # [seq_len, batch, num_attention_heads, hidden_size_per_attention_head]
             query_layer, key_layer = apply_rotary_pos_emb_index(query_layer, key_layer, cos, sin, position_ids)

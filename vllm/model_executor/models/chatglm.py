@@ -20,14 +20,8 @@ from vllm.sequence import SequenceOutputs
 logger = logging.get_logger(__name__)
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
-# if sys.platform != 'darwin':
-#     torch._C._jit_set_profiling_mode(False)
-#     torch._C._jit_set_profiling_executor(False)
-#     torch._C._jit_override_can_fuse_on_cpu(True)
-#     torch._C._jit_override_can_fuse_on_gpu(True)
 
-
-# @torch.jit.script
+@torch.jit.script
 def gelu_impl(x):
     """OpenAI's gelu implementation."""
     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
@@ -94,7 +88,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in earlier torch versions
 
 
-# @torch.jit.script
+@torch.jit.script
 def apply_rotary_pos_emb_index(q, k, cos, sin, position_id):
     # position_id: [sq, b], q, k: [sq, b, np, hn], cos: [sq, 1, hn] -> [sq, b, 1, hn]
     cos, sin = F.embedding(position_id, cos.squeeze(1)).unsqueeze(2), \
@@ -199,8 +193,8 @@ class SelfAttention(torch.nn.Module):
         hidden_states: [seq_len, batch, hidden_size]
         attention_mask: [(1, 1), seq_len, seq_len]
         """
-        hidden_states = torch.stack([hidden_states]).transpose(0, 1)
-        positions = torch.stack([positions]).transpose(0, 1)
+        hidden_states = torch.unsqueeze(hidden_states, 0).transpose(0, 1)
+        position_ids = torch.unsqueeze(positions, 0)
 
         # [seq_len, batch, 3 * hidden_size]
         mixed_raw_layer = self.query_key_value(hidden_states)
@@ -218,15 +212,15 @@ class SelfAttention(torch.nn.Module):
         if self.position_encoding_2d:
             q1, q2 = query_layer.chunk(2, dim=(query_layer.ndim - 1))
             k1, k2 = key_layer.chunk(2, dim=(key_layer.ndim - 1))
-            cos, sin = self.rotary_emb(q1, seq_len=positions.max() + 1)
-            position_ids, block_position_ids = positions[0, :, :].contiguous(), \
-                                               positions[1, :, :].contiguous()
+            cos, sin = self.rotary_emb(q1, seq_len=position_ids.max() + 1)
+            position_ids, block_position_ids = position_ids[:, 0, :].transpose(0, 1).contiguous(), \
+                                               position_ids[:, 1, :].transpose(0, 1).contiguous()
             q1, k1 = apply_rotary_pos_emb_index(q1, k1, cos, sin, position_ids)
             q2, k2 = apply_rotary_pos_emb_index(q2, k2, cos, sin, block_position_ids)
             query_layer = torch.concat([q1, q2], dim=(q1.ndim - 1))
             key_layer = torch.concat([k1, k2], dim=(k1.ndim - 1))
         else:
-            position_ids = positions
+            position_ids = position_ids.transpose(0, 1)
             cos, sin = self.rotary_emb(value_layer, seq_len=position_ids.max() + 1)
             # [seq_len, batch, num_attention_heads, hidden_size_per_attention_head]
             query_layer, key_layer = apply_rotary_pos_emb_index(query_layer, key_layer, cos, sin, position_ids)

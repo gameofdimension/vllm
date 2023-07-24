@@ -193,6 +193,8 @@ class SelfAttention(torch.nn.Module):
         hidden_states: [seq_len, batch, hidden_size]
         attention_mask: [(1, 1), seq_len, seq_len]
         """
+        hidden_states = torch.stack([hidden_states]).transpose(0, 1)
+        positions = torch.stack([positions]).transpose(0, 1)
 
         # [seq_len, batch, 3 * hidden_size]
         mixed_raw_layer = self.query_key_value(hidden_states)
@@ -211,19 +213,23 @@ class SelfAttention(torch.nn.Module):
             q1, q2 = query_layer.chunk(2, dim=(query_layer.ndim - 1))
             k1, k2 = key_layer.chunk(2, dim=(key_layer.ndim - 1))
             cos, sin = self.rotary_emb(q1, seq_len=positions.max() + 1)
-            position_ids, block_position_ids = positions[0, :].contiguous(), \
-                                               positions[1, :].contiguous()
+            position_ids, block_position_ids = positions[:, 0, :].transpose(0, 1).contiguous(), \
+                                               positions[:, 1, :].transpose(0, 1).contiguous()
             q1, k1 = apply_rotary_pos_emb_index(q1, k1, cos, sin, position_ids)
             q2, k2 = apply_rotary_pos_emb_index(q2, k2, cos, sin, block_position_ids)
             query_layer = torch.concat([q1, q2], dim=(q1.ndim - 1))
             key_layer = torch.concat([k1, k2], dim=(k1.ndim - 1))
         else:
-            # position_ids = positions.transpose(0, 1)
-            cos, sin = self.rotary_emb(value_layer, seq_len=positions.max() + 1)
+            position_ids = positions.transpose(0, 1)
+            cos, sin = self.rotary_emb(value_layer, seq_len=position_ids.max() + 1)
             # [seq_len, batch, num_attention_heads, hidden_size_per_attention_head]
-            query_layer, key_layer = apply_rotary_pos_emb_index(query_layer, key_layer, cos, sin, positions)
+            query_layer, key_layer = apply_rotary_pos_emb_index(query_layer, key_layer, cos, sin, position_ids)
 
         key_cache, value_cache = kv_cache
+        assert query_layer.size(1) == key_layer.size(1) == value_layer.size(1) == 1
+        query_layer = query_layer.transpose(0, 1)[0]
+        key_layer = key_layer.transpose(0, 1)[0]
+        value_layer = value_layer.transpose(0, 1)[0]
         context_layer = self.attn(query_layer, key_layer, value_layer, key_cache, value_cache,
                                   input_metadata, cache_event)
 

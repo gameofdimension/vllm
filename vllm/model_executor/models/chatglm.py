@@ -213,8 +213,8 @@ class SelfAttention(torch.nn.Module):
             q1, q2 = query_layer.chunk(2, dim=(query_layer.ndim - 1))
             k1, k2 = key_layer.chunk(2, dim=(key_layer.ndim - 1))
             cos, sin = self.rotary_emb(q1, seq_len=positions.max() + 1)
-            position_ids, block_position_ids = positions[:, 0, :].transpose(0, 1).contiguous(), \
-                                               positions[:, 1, :].transpose(0, 1).contiguous()
+            position_ids, block_position_ids = positions[0, :, :].contiguous(), \
+                                               positions[1, :, :].contiguous()
             q1, k1 = apply_rotary_pos_emb_index(q1, k1, cos, sin, position_ids)
             q2, k2 = apply_rotary_pos_emb_index(q2, k2, cos, sin, block_position_ids)
             query_layer = torch.concat([q1, q2], dim=(q1.ndim - 1))

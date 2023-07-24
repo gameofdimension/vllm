@@ -405,6 +405,8 @@ class RealChatGLMModel(nn.Module):
         self.pre_seq_len = config.pre_seq_len
         self.prefix_projection = config.prefix_projection
 
+        self.config = config
+
         self.word_embeddings = init_method(
             torch.nn.Embedding,
             num_embeddings=self.vocab_size, embedding_dim=self.hidden_size,

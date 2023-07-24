@@ -20,14 +20,14 @@ from vllm.sequence import SequenceOutputs
 logger = logging.get_logger(__name__)
 KVCache = Tuple[torch.Tensor, torch.Tensor]
 
-if sys.platform != 'darwin':
-    torch._C._jit_set_profiling_mode(False)
-    torch._C._jit_set_profiling_executor(False)
-    torch._C._jit_override_can_fuse_on_cpu(True)
-    torch._C._jit_override_can_fuse_on_gpu(True)
+# if sys.platform != 'darwin':
+#     torch._C._jit_set_profiling_mode(False)
+#     torch._C._jit_set_profiling_executor(False)
+#     torch._C._jit_override_can_fuse_on_cpu(True)
+#     torch._C._jit_override_can_fuse_on_gpu(True)
 
 
-@torch.jit.script
+# @torch.jit.script
 def gelu_impl(x):
     """OpenAI's gelu implementation."""
     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
@@ -94,7 +94,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in earlier torch versions
 
 
-@torch.jit.script
+# @torch.jit.script
 def apply_rotary_pos_emb_index(q, k, cos, sin, position_id):
     # position_id: [sq, b], q, k: [sq, b, np, hn], cos: [sq, 1, hn] -> [sq, b, 1, hn]
     cos, sin = F.embedding(position_id, cos.squeeze(1)).unsqueeze(2), \

@@ -459,6 +459,31 @@ class RealChatGLMModel(nn.Module):
 
         return position_ids
 
+    def build_positions(self, input_ids: torch.Tensor):
+        assert len(input_ids.size()) == 1
+        ids_list = input_ids.tolist()
+        if not (ids_list[-2] == self.config.gmask_token_id and ids_list[-1] == self.config.bos_token_id):
+            ids_list[-2], ids_list[-1] = self.config.gmask_token_id, self.config.bos_token_id
+        input_ids = torch.LongTensor([ids_list])
+
+        MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
+        seqs = input_ids.tolist()
+
+        mask_positions, use_gmasks = [], []
+        for seq in seqs:
+            mask_token = gMASK if gMASK in seq else MASK
+            use_gmask = mask_token == gMASK
+            mask_positions.append(seq.index(mask_token))
+            use_gmasks.append(use_gmask)
+
+        position_ids = self.get_position_ids(
+            input_ids,
+            mask_positions=mask_positions,
+            device=input_ids.device,
+            use_gmasks=use_gmasks
+        )
+        return input_ids[0], position_ids[0]
+
     def forward(
             self,
             input_ids: torch.LongTensor,
@@ -467,29 +492,9 @@ class RealChatGLMModel(nn.Module):
             input_metadata: InputMetadata,
             cache_events: Optional[List[torch.cuda.Event]],
     ) -> torch.Tensor:
+        if positions is None:
+            input_ids, positions = self.build_positions(input_ids)
         inputs_embeds = self.word_embeddings(input_ids)
-
-        def build_positions():
-            MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
-            seq = input_ids.tolist()
-
-            mask_positions, use_gmasks = [], []
-
-            mask_token = gMASK if gMASK in seq else MASK
-            use_gmask = mask_token == gMASK
-            mask_positions.append(seq.index(mask_token))
-            use_gmasks.append(use_gmask)
-
-            position_ids = self.get_position_ids(
-                input_ids,
-                mask_positions=mask_positions,
-                device=input_ids.device,
-                use_gmasks=use_gmasks
-            )
-            return position_ids
-
-        assert positions is None
-        positions = build_positions()
         hidden_states = inputs_embeds.transpose(0, 1)
         for i, layer in enumerate(self.layers):
             if cache_events is None:
@@ -539,12 +544,13 @@ class ChatGLMModel(nn.Module):
         assert len(input_ids.size()) == 1
         hidden_states = self.transformer(
             input_ids=input_ids,
-            positions=None,
+            positions=positions if len(positions.size()) == 2 and positions.size(0) == 2 else None,
             kv_caches=kv_caches,
             input_metadata=input_metadata,
             cache_events=cache_events,
         )
 
+        hidden_states.transpose(0, 1)
         next_tokens = self.sampler(self.lm_head.weight, hidden_states,
                                    input_metadata)
         return next_tokens

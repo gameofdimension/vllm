@@ -384,7 +384,7 @@ class GLMBlock(torch.nn.Module):
 class RealChatGLMModel(nn.Module):
 
     def __init__(self, config, empty_init=True):
-        super().__init__(config)
+        super().__init__()
         if empty_init:
             init_method = skip_init
         else:
@@ -507,7 +507,7 @@ class RealChatGLMModel(nn.Module):
 
 class ChatGLMModel(nn.Module):
     def __init__(self, config, empty_init=True):
-        super().__init__(config)
+        super().__init__()
         if empty_init:
             init_method = skip_init
         else:

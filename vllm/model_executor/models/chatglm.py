@@ -464,7 +464,7 @@ class RealChatGLMModel(nn.Module):
         ids_list = input_ids.tolist()
         if not (ids_list[-2] == self.config.gmask_token_id and ids_list[-1] == self.config.bos_token_id):
             ids_list[-2], ids_list[-1] = self.config.gmask_token_id, self.config.bos_token_id
-        input_ids = torch.LongTensor([ids_list], device=input_ids.device)
+        input_ids = torch.LongTensor([ids_list]).to(input_ids.device)
 
         MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id
         seqs = input_ids.tolist()

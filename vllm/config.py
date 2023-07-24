@@ -79,7 +79,7 @@ class ModelConfig:
                 f"({tensor_parallel_size}).")
 
         total_num_hidden_layers = self.hf_config.num_hidden_layers if \
-            hasattr(self.hf_config, 'num_hidden_layers') else self.hf_config.num_hidden_layers
+            hasattr(self.hf_config, 'num_hidden_layers') else self.hf_config.num_layers
         pipeline_parallel_size = parallel_config.pipeline_parallel_size
         if total_num_hidden_layers % pipeline_parallel_size != 0:
             raise ValueError(
@@ -112,7 +112,7 @@ class ModelConfig:
 
     def get_num_layers(self, parallel_config: "ParallelConfig") -> int:
         total_num_hidden_layers = self.hf_config.num_hidden_layers if \
-            hasattr(self.hf_config, 'num_hidden_layers') else self.hf_config.num_hidden_layers
+            hasattr(self.hf_config, 'num_hidden_layers') else self.hf_config.num_layers
         return total_num_hidden_layers // parallel_config.pipeline_parallel_size
 
 

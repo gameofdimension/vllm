@@ -467,8 +467,6 @@ class RealChatGLMModel(nn.Module):
             input_metadata: InputMetadata,
             cache_events: Optional[List[torch.cuda.Event]],
     ) -> torch.Tensor:
-
-        assert len(input_ids.size()) == 1
         inputs_embeds = self.word_embeddings(input_ids)
 
         def build_positions():
@@ -538,6 +536,7 @@ class ChatGLMModel(nn.Module):
             input_metadata: InputMetadata,
             cache_events: Optional[List[torch.cuda.Event]],
     ) -> Dict[int, SequenceOutputs]:
+        assert len(input_ids.size()) == 1
         hidden_states = self.transformer(
             input_ids=input_ids,
             positions=None,

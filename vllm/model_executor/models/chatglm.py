@@ -547,6 +547,9 @@ class ChatGLMModel(nn.Module):
                                    input_metadata)
         return next_tokens
 
+    _column_parallel_weights = []
+    _row_parallel_weights = []
+
     def load_weights(
             self,
             model_name_or_path: str,

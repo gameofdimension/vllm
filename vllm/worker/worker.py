@@ -152,7 +152,7 @@ class Worker:
     ) -> Tuple[torch.Tensor, torch.Tensor, InputMetadata]:
         seq_groups: List[Tuple[List[int], SamplingParams]] = []
         input_tokens: List[int] = []
-        input_positions: List[int] = []
+        input_positions: List = []
         slot_mapping: List[int] = []
 
         # Add prompt tokens.
@@ -176,7 +176,13 @@ class Worker:
             input_tokens.extend(prompt_tokens)
             # NOTE(woosuk): Here we assume that the first token in the prompt
             # is always the first token in the sequence.
-            input_positions.extend(range(len(prompt_tokens)))
+            if self.model_config.hf_config.model_type == 'chatglm':
+                assert prompt_tokens[-2] == 130001 and prompt_tokens[-1] == 130004
+                for i in range(len(prompt_tokens) - 1):
+                    input_positions.append((i, 0))
+                input_positions.append((input_positions[-1][0], 1))
+            else:
+                input_positions.extend(range(len(prompt_tokens)))
 
             if seq_group_metadata.block_tables is None:
                 # During memory profiling, the block tables are not initialized
@@ -206,13 +212,17 @@ class Worker:
             seq_groups.append((seq_ids, sampling_params))
 
             for seq_id in seq_ids:
-                seq_data = seq_group_metadata.seq_data[seq_id]
+                seq_data: SequenceData = seq_group_metadata.seq_data[seq_id]
                 generation_token = seq_data.get_last_token_id()
                 input_tokens.append(generation_token)
 
                 context_len = seq_data.get_len()
                 position = context_len - 1
-                input_positions.append(position)
+                if self.model_config.hf_config.model_type == 'chatglm':
+                    input_positions.append(position)
+                else:
+                    prompt_len = seq_data.get_len() - seq_data.get_output_len()
+                    input_positions.append((prompt_len - 2, seq_data.get_output_len() + 1))
 
                 block_table = seq_group_metadata.block_tables[seq_id]
                 generation_block_tables.append(block_table)
@@ -336,8 +346,10 @@ def _init_distributed_environment(
                               parallel_config.pipeline_parallel_size)
 
 
-def _pad_to_alignment(x: List[int], multiple_of: int) -> List[int]:
-    return x + [0] * ((-len(x)) % multiple_of)
+def _pad_to_alignment(x: List, multiple_of: int) -> List:
+    if isinstance(x[0], int):
+        return x + [0] * ((-len(x)) % multiple_of)
+    return x + [(0, 0)] * ((-len(x)) % multiple_of)
 
 
 def _pad_to_max(x: List[int], max_len: int) -> List[int]:

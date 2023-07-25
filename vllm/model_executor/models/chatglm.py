@@ -467,10 +467,14 @@ class RealChatGLMModel(nn.Module):
     def build_positions(self, input_ids: torch.Tensor):
         assert len(input_ids.size()) == 1
         ids_list = input_ids.tolist()
-        ia = ids_list.index(self.config.gmask_token_id)
-        ib = ids_list.index(self.config.bos_token_id)
-        if ia + 1 != ib:
+        try:
+            ia = ids_list.index(self.config.gmask_token_id)
+            ib = ids_list.index(self.config.bos_token_id)
+            if ia + 1 != ib:
+                ids_list[-2], ids_list[-1] = self.config.gmask_token_id, self.config.bos_token_id
+        except ValueError:
             ids_list[-2], ids_list[-1] = self.config.gmask_token_id, self.config.bos_token_id
+
         input_ids = torch.LongTensor([ids_list]).to(input_ids.device)
 
         MASK, gMASK = self.config.mask_token_id, self.config.gmask_token_id

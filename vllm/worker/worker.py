@@ -170,6 +170,9 @@ class Worker:
 
             seq_data = seq_group_metadata.seq_data[seq_id]
             prompt_tokens = seq_data.get_token_ids()
+            if self.model_config.hf_config.model_type == 'chatglm':
+                prompt_tokens[-2] = self.model_config.hf_config.gmask_token_id
+                prompt_tokens[-1] = self.model_config.hf_config.bos_token_id
             prompt_len = len(prompt_tokens)
             prompt_lens.append(prompt_len)
 
@@ -177,7 +180,8 @@ class Worker:
             # NOTE(woosuk): Here we assume that the first token in the prompt
             # is always the first token in the sequence.
             if self.model_config.hf_config.model_type == 'chatglm':
-                assert prompt_tokens[-2] == 130001 and prompt_tokens[-1] == 130004
+                assert prompt_tokens[-2] == self.model_config.hf_config.gmask_token_id and \
+                       prompt_tokens[-1] == self.model_config.hf_config.bos_token_id
                 for i in range(len(prompt_tokens) - 1):
                     input_positions.append((i, 0))
                 input_positions.append((input_positions[-1][0], 1))

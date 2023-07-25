@@ -467,7 +467,9 @@ class RealChatGLMModel(nn.Module):
     def build_positions(self, input_ids: torch.Tensor):
         assert len(input_ids.size()) == 1
         ids_list = input_ids.tolist()
-        if not (ids_list[-2] == self.config.gmask_token_id and ids_list[-1] == self.config.bos_token_id):
+        ia = ids_list.index(self.config.gmask_token_id)
+        ib = ids_list.index(self.config.bos_token_id)
+        if ia + 1 != ib:
             ids_list[-2], ids_list[-1] = self.config.gmask_token_id, self.config.bos_token_id
         input_ids = torch.LongTensor([ids_list]).to(input_ids.device)
 
@@ -561,7 +563,7 @@ class ChatGLMModel(nn.Module):
         Prompt: 'The future of AI is', Generated text: "I's母親親親親和之国之国之国之国之国之国之国"
         Prompt: '[Round 0]\n问：你好\n答：', Generated text: 'Hello Hello Hello!'
         
-        虽然跑通了，结果看起来相对诡异，另外看到显存消耗高峰达到 40G+，这超出预期太多
+        虽然跑通了，结果看起来相对诡异
         输出诡异的问题可能还是自注意力部分改的太激进了，清华的这个模型独有的一些 trick 很多，比如
         attention 实现中缩放参数居然还用到了层编号信息。因此按标准自注意力的假定去改的话可能会改错，
         要想做对还是要读懂源码，确认下跟标准自注意力差异有哪些，同时看下能否跟 vllm 现有的设施做下适配。

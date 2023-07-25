@@ -222,7 +222,7 @@ class Worker:
 
                 context_len = seq_data.get_len()
                 position = context_len - 1
-                if self.model_config.hf_config.model_type == 'chatglm':
+                if self.model_config.hf_config.model_type != 'chatglm':
                     input_positions.append(position)
                 else:
                     prompt_len = seq_data.get_len() - seq_data.get_output_len()
@@ -249,6 +249,8 @@ class Worker:
         # Convert to tensors.
         tokens_tensor = torch.cuda.LongTensor(input_tokens)
         positions_tensor = torch.cuda.LongTensor(input_positions)
+        if len(positions_tensor.size()) == 2:
+            positions_tensor = positions_tensor.transpose(0, 1)
         slot_mapping_tensor = torch.cuda.IntTensor(slot_mapping)
         context_lens_tensor = torch.cuda.IntTensor(context_lens)
         padded_block_tables = [

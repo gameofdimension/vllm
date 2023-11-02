@@ -46,7 +46,6 @@ class Sampler(nn.Module):
         # Get the logits for the next tokens.
         logits = _get_logits(hidden_states, embedding, embedding_bias,
                              self.vocab_size)
-        # print("8888888888888", torch.argmax(logits, dim=-1))
 
         # Apply presence and frequency penalties.
         output_tokens = _get_output_tokens(input_metadata)

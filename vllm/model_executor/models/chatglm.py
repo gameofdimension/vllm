@@ -265,11 +265,11 @@ class GLMTransformer(nn.Module):
                 input_metadata=input_metadata,
                 cache_event=cache_event,
             )
-            print(f"1261 {i}", hidden_states[..., :5])
+            print(f"1261 {i}", hidden_states[..., 3, :5])
         # Final layer norm.
         if self.post_layer_norm:
             hidden_states = self.final_layernorm(hidden_states)
-        print(f"1261 final", hidden_states[..., :5])
+        print(f"1261 final", hidden_states[..., 3, :5])
 
         return hidden_states
 

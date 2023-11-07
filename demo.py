@@ -28,7 +28,7 @@ def run_transformer(prompt):
     for i in range(len(outputs.hidden_states)):
         hidden_state = outputs.hidden_states[i]
         hidden_state = hidden_state.permute(1, 0, 2)
-        print(f"gold {i}", hidden_state[..., :5])
+        print(f"gold {i}", hidden_state[..., 3, :5])
     del model
 
 

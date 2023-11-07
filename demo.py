@@ -3,7 +3,7 @@ import torch
 
 def run_llm(prompt):
     from vllm import LLM, SamplingParams
-    llm = LLM(model="THUDM/chatglm3-6b", trust_remote_code=True, max_model_len=8192)
+    llm = LLM(model="THUDM/chatglm3-6b", trust_remote_code=True, max_model_len=8192, dtype='float32')
     sampling_params = SamplingParams(temperature=0.0, max_tokens=1)
     outputs = llm.generate(prompt, sampling_params)
 

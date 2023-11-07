@@ -35,5 +35,5 @@ def run_transformer(prompt):
 if __name__ == '__main__':
     # check_rope()
     prompt = "给六岁小朋友解释一下万有引"
-    run_llm(prompt)
+    # run_llm(prompt)
     run_transformer(prompt)

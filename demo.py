@@ -20,6 +20,7 @@ def run_llm():
         prompt = output.prompt
         generated_text = output.outputs[0].text
         print(f"Prompt: {prompt!r}, Generated text: {generated_text!r}")
+    del llm
 
 
 def run_transformer():
@@ -40,6 +41,7 @@ def run_transformer():
     outputs = torch.argmax(outputs.logits, dim=-1).tolist()[0]
     print(outputs)
     response = tokenizer.decode(outputs)
+    del model
 
 
 if __name__ == '__main__':

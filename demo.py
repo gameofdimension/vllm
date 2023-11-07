@@ -3,7 +3,7 @@ import torch
 
 def run_llm(prompt):
     from vllm import LLM, SamplingParams
-    llm = LLM(model="THUDM/chatglm3-6b", trust_remote_code=True, max_model_len=8192, dtype='float32')
+    llm = LLM(model="THUDM/chatglm3-6b", trust_remote_code=True, max_model_len=8192)
     sampling_params = SamplingParams(temperature=0.0, max_tokens=1)
     outputs = llm.generate(prompt, sampling_params)
 
@@ -18,7 +18,7 @@ def run_llm(prompt):
 def run_transformer(prompt):
     from transformers import AutoTokenizer, AutoModel
     tokenizer = AutoTokenizer.from_pretrained("THUDM/chatglm3-6b", trust_remote_code=True)
-    model = AutoModel.from_pretrained("THUDM/chatglm3-6b", trust_remote_code=True, torch_dtype=torch.float32).cuda()
+    model = AutoModel.from_pretrained("THUDM/chatglm3-6b", trust_remote_code=True).cuda()
     model = model.eval()
     tko = tokenizer(prompt)
     input_ids = torch.LongTensor([tko.input_ids]).to('cuda')

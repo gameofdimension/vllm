@@ -15,6 +15,14 @@ from vllm.models.deepseek_v4.common.ops import (
 from vllm.models.deepseek_v4.nvidia.ops.o_proj import (
     compute_fp8_einsum_recipe,
     deep_gemm_fp8_o_proj,
+    sm120_o_proj,
+)
+from vllm.utils.deep_gemm import is_deep_gemm_supported
+from vllm.models.deepseek_v4.nvidia.flash_mla_sm120_triton import (
+    flash_mla_sparse_decode_triton,
+)
+from vllm.models.deepseek_v4.nvidia.flash_mla_sparse_fwd_sm120 import (
+    flash_mla_sparse_fwd_sm120,
 )
 from vllm.models.deepseek_v4.sparse_mla import (
     DeepseekV4FlashMLABackend,
@@ -40,19 +48,31 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
         self._einsum_recipe, self._tma_aligned_scales = compute_fp8_einsum_recipe()
 
     def _o_proj(self, o: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        return deep_gemm_fp8_o_proj(
+        if is_deep_gemm_supported():
+            return deep_gemm_fp8_o_proj(
+                o,
+                positions,
+                self.rotary_emb.cos_sin_cache,
+                self.wo_a,
+                self.wo_b,
+                n_groups=self.n_local_groups,
+                heads_per_group=self.n_local_heads // self.n_local_groups,
+                nope_dim=self.nope_head_dim,
+                rope_dim=self.rope_head_dim,
+                o_lora_rank=self.o_lora_rank,
+                einsum_recipe=self._einsum_recipe,
+                tma_aligned_scales=self._tma_aligned_scales,
+            )
+        # sm_120 (no DeepGEMM): bf16 inv-RoPE + grouped einsum + wo_b.
+        return sm120_o_proj(
             o,
             positions,
             self.rotary_emb.cos_sin_cache,
             self.wo_a,
             self.wo_b,
             n_groups=self.n_local_groups,
-            heads_per_group=self.n_local_heads // self.n_local_groups,
-            nope_dim=self.nope_head_dim,
             rope_dim=self.rope_head_dim,
             o_lora_rank=self.o_lora_rank,
-            einsum_recipe=self._einsum_recipe,
-            tma_aligned_scales=self._tma_aligned_scales,
         )
 
     @classmethod
@@ -216,23 +236,38 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
             "allocate one for this layer type."
         )
 
-        out, _ = flash_mla_with_kvcache(
-            q=q,
-            k_cache=swa_cache,
-            block_table=None,
-            head_dim_v=512,
-            tile_scheduler_metadata=tile_metadata,
-            cache_seqlens=None,
-            is_fp8_kvcache=True,
-            indices=swa_indices,
-            topk_length=swa_lens,
-            softmax_scale=self.scale,
-            attn_sink=self.attn_sink,
-            extra_k_cache=kv_cache if not swa_only else None,
-            extra_indices_in_kvcache=topk_indices,
-            extra_topk_length=topk_lens,
-            out=output.unsqueeze(1),
-        )
+        if is_deep_gemm_supported():
+            out, _ = flash_mla_with_kvcache(
+                q=q,
+                k_cache=swa_cache,
+                block_table=None,
+                head_dim_v=512,
+                tile_scheduler_metadata=tile_metadata,
+                cache_seqlens=None,
+                is_fp8_kvcache=True,
+                indices=swa_indices,
+                topk_length=swa_lens,
+                softmax_scale=self.scale,
+                attn_sink=self.attn_sink,
+                extra_k_cache=kv_cache if not swa_only else None,
+                extra_indices_in_kvcache=topk_indices,
+                extra_topk_length=topk_lens,
+                out=output.unsqueeze(1),
+            )
+        else:
+            _o, _ = flash_mla_sparse_decode_triton(
+                q=q,
+                k_cache=swa_cache,
+                indices=swa_indices,
+                topk_length=swa_lens,
+                attn_sink=self.attn_sink,
+                head_dim_v=512,
+                softmax_scale=self.scale,
+                extra_k_cache=kv_cache if not swa_only else None,
+                extra_indices=topk_indices,
+                extra_topk_length=topk_lens,
+            )
+            output.copy_(_o.squeeze(1))
 
     def _forward_prefill(
         self,
@@ -344,12 +379,25 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
                 M,
                 N,
             )
-            flash_mla_sparse_fwd(
-                q=q[query_start:query_end],
-                kv=kv.view(-1, 1, q.shape[-1]),
-                indices=combined_indices.unsqueeze(1),
-                sm_scale=self.scale,
-                attn_sink=self.attn_sink,
-                topk_length=combined_lens,
-                out=output[query_start:query_end],
-            )
+            if is_deep_gemm_supported():
+                flash_mla_sparse_fwd(
+                    q=q[query_start:query_end],
+                    kv=kv.view(-1, 1, q.shape[-1]),
+                    indices=combined_indices.unsqueeze(1),
+                    sm_scale=self.scale,
+                    attn_sink=self.attn_sink,
+                    topk_length=combined_lens,
+                    out=output[query_start:query_end],
+                )
+            else:
+                # sm_120: no FlashMLA sparse prefill C kernel (SM90/100 only) —
+                # gathered sparse attention over the dense bf16 KV buffer.
+                flash_mla_sparse_fwd_sm120(
+                    q[query_start:query_end],
+                    kv.view(-1, 1, q.shape[-1]),
+                    combined_indices.unsqueeze(1),
+                    self.scale,
+                    self.attn_sink,
+                    combined_lens,
+                    output[query_start:query_end],
+                )

@@ -395,6 +395,22 @@ class Fp8LinearMethod(LinearMethodBase):
         # TODO(rob): refactor block quant into separate class.
         if self.block_quant:
             assert not self.act_q_static
+            # [sm_120 / DeepSeek-V4 fp4] Convert ue8m0 (float8_e8m0fnu) block
+            # scales to float32 so CUTLASS e4m3+f32 scaled_mm works (DeepGEMM
+            # is gated off on sm_120; CUTLASS has no e8m0 kernel). Scoped to
+            # DeepSeek-V4 fp4 (is_scale_e8m0 True only there) on sm_120.
+            if self.is_scale_e8m0 and not is_deep_gemm_supported():
+                sf = getattr(layer, "weight_scale_inv", None)
+                if sf is not None and sf.dtype == torch.float8_e8m0fnu:
+                    sf_f32 = (
+                        sf.contiguous()
+                        .view(torch.uint8)
+                        .to(torch.int32)
+                        .__lshift__(23)
+                        .view(torch.float32)
+                    )
+                    replace_parameter(layer, "weight_scale_inv", sf_f32)
+                    layer.weight_scale_inv.format_ue8m0 = False
 
         # If checkpoint not serialized fp8, quantize the weights.
         else:

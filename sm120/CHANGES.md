@@ -136,3 +136,72 @@ decode 前向顺序：① c4 indexer 打分(fp8_fp4_paged_mqa_logits) → ② ML
 PyTorch indexer scorer + prefill MLA 是朴素 eager 实现（分块循环），远慢于 DeepGEMM/C 核；首次 CUDA graph 捕获也慢。生产吞吐需优化（换 Triton scorer / 融合）。门控 `is_deep_gemm_supported()`，SM90/SM100 完全不受影响。
 
 ---
+
+## [2026-06-17] 源码树迁移落地 + editable install（环境实录）
+
+> 范式从「wheel 补丁」切到「源码树编辑」的落地记录。包含一处**重要环境偏差**：HANDOFF §5 的 `uv pip install -e .` 在本机因 PyPI CDN 不可达而走不通，改用「复用 native-vllm」方案。
+
+### A. 源码树改动落地（`/root/vllm-sm120/vllm/`）
+- 源码 == `backups/*.orig`（干净 v0.23.0，仅多一个 `add handoff files` commit）→ 4 个新文件 `cp` + 6 处编辑 `cp patched/` 为**精确覆盖**（diff 验证 6 个编辑文件 == canonical patched；4 个新文件就位）。
+- 10 个文件 `py_compile` 全过；导入路径校验：`sm120_o_proj` / `flash_mla_sm120_triton` / `flash_mla_sparse_fwd_sm120` / `fp8_paged_mqa_logits_sm120` 均命中正确源码路径；`is_deep_gemm_supported()=False`。
+
+### B. editable install —— 偏离 HANDOFF §5（重要）
+- **根因**：本机 `files.pythonhosted.org`（PyPI CDN）**不可达**（6MB wheel 20s 超时），而 `download.pytorch.org` / `wheels.vllm.ai` 可达。→ 无法从 PyPI 拉 torch/依赖 wheel，`VLLM_USE_PRECOMPILED=1 uv pip install -e .` 卡死在依赖下载；fresh build 还缺 `setuptools-rust`/`wheel`（且 PyPI 取不到）。
+- **复用基础**：`/root/native-vllm/.venv` = 旧 wheel-patched 验证环境 —— vllm 0.23.0 site-packages **已带 sm120 补丁** + 全套 `_C` + 全依赖（torch 2.11.0+cu130，190 包）。即「四墙全攻破」那套环境的留存。
+- **实际 editable 做法**（`uv venv` 创建 venv 符合「用 uv」，依赖/`_C` 复用绕开 PyPI）：
+  1. `uv venv --python 3.12 .venv`
+  2. `cp -al /root/native-vllm/.venv/.../site-packages/. .venv/.../site-packages/`（硬链接全依赖，0 额外磁盘）
+  3. 删 `.venv/.../site-packages/vllm/`（消除与源码竞争；保留 `vllm-0.23.0.dist-info`）
+  4. **源码树补齐 build/vendored 产物**（git checkout 缺、安装包才有）——从 native-vllm `cp` 进 `vllm/`：
+     - 14 个 `.so`：`_C`、`_C_stable_libtorch`、`cumem_allocator`、`_flashmla_C`、`_flashmla_extension_C`、`_moe_C`、`spinloop`、`vllm_flash_attn/{_vllm_fa2_C,_vllm_fa3_C}`、`third_party/deep_gemm/_C.cp31x`
+     - 整个 `third_party/`（flashmla/deep_gemm/triton_kernels/pynvml，36M / 968 文件）
+     - `vllm_flash_attn/cute/*`（vendored FA 接口 .py）
+     - `vllm-rs`（36M Rust 扩展，`envs.py`/`v1/utils.py` 运行时导入）
+     - `_version.py`（build 时生成）
+     - 用 `cp -an`（no-clobber）gap-fill，**不覆盖**我们打了补丁的 6 个 .py + 4 个新文件（grep 验证 flashmla.py 仍有 4 个 sm120 标记）
+  5. `.pth`（`_vllm_source_editable.pth` 含 `/root/vllm-sm120`）→ `import vllm` 解析到源码树
+  6. `.venv/bin/vllm` 控制台脚本（`vllm.entrypoints.cli.main:main`）
+- **验证**（从 `/tmp`，非 repo 根）：`import vllm` → `/root/vllm-sm120/vllm/__init__.py`；`vllm._C` 可载；`is_deep_gemm_supported()=False`；4 个新模块在导入的源码里；`vllm --help` 正常。
+- **launch.sh 注意**：原 `uv run vllm serve` 会触发 `uv run` 的项目 sync（撞 PyPI）。源码模式下直接 `.venv/bin/vllm serve`（已验证），或 `uv run --no-sync vllm serve`。
+
+### C. 端到端验证（VERIFIED 2026-06-17）
+- `.venv/bin/vllm serve /warehouse/DeepSeek-V4-Flash --tp 8 --kv-cache-dtype fp8 --gpu-memory-utilization 0.9 --enforce-eager`：safetensors 100%（9.84s）、Model loading 20 GiB、KV cache 6.2M tokens、`Application startup complete`。**无** DeepGEMM/FlashMLA-C/ue8m0 崩溃（四墙全绕开）。
+- `15*23=?`（max_tokens 256, temp 0）→ **345**，`finish_reason=stop`，分步推理正确。端到端正确推理复现。
+- 用 `--enforce-eager` 为快速验证（省 ~12min CUDA graph 捕获）；sm120 算子本就在 breakable-cudagraph 的 eager 段。**生产吞吐**用去掉 `--enforce-eager` 的完整命令（启动 ~14min）。
+
+### D. 源码树新增的 untracked 产物（git 视角，建议 .gitignore）
+`vllm/*.so`、`vllm/third_party/`、`vllm/vllm_flash_attn/cute/`、`vllm/vllm-rs`、`vllm/_version.py`、`vllm/**/__pycache__` —— 均为 build 产物 / vendored / 生成文件，正常 editable dev tree 会有；应加入 `.gitignore` 避免误提交（它们不属于 sm120 改动本身）。
+
+---
+
+## [2026-06-18] 补充：PyPI 镜像修复 → 标准 uv editable install 可用（正解）
+
+> §B 的「复用 native-vllm」是 PyPI CDN 不可达时的临时方案。**加腾讯 PyPI 镜像后，标准 `uv pip install -e .` 即可用** —— 这才是正解，复用方案降级为 fallback。
+
+### 配置
+`/root/.config/uv/uv.toml`（把腾讯镜像设为 default index，绕开不可达的 files.pythonhosted.org）：
+```toml
+[[index]]
+name = "tencent"
+url = "http://mirrors.tencentyun.com/pypi/simple"
+default = true
+```
+
+### 标准 editable install 成功
+```
+VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=cu130
+# Resolved 190 packages in 42.96s
+# + vllm==0.23.1.dev1+g21a7715fe.d20260618.precompiled (from file:///root/vllm-sm120)
+```
+- proper `__editable__.vllm-0.23.1.dev1+g21a7715fe...pth`（PEP 660 finder）+ dist-info；`_C` 由 precompiled 落入源码树。
+- torch 仍走 `download.pytorch.org`（`--torch-backend=cu130`），其余走镜像。
+- 验证（/tmp）：`import vllm`→`/root/vllm-sm120/vllm/__init__.py`；`vllm._C` 可载；`is_deep_gemm_supported()=False`；4 个 sm120 模块在导入源码；torch 2.11.0+cu130。
+- `uv run vllm --help` 正常 → `launch.sh` 的 `uv run vllm serve` 现在可用（建议加 `--no-sync` 保险）。
+
+### 端到端验证（VERIFIED 2026-06-18）
+标准 install 起服务（`--enforce-eager`）：`Application startup complete`、weights 9.66s、Model 20.04 GiB。`15*23=?`→**345**，`finish_reason=stop`。与复用方案行为一致。
+
+### 收尾
+删 `.venv_reuse`（复用 fallback，不再需要），只留标准 `.venv`。`/root/native-vllm/.venv` 仍作 _C/依赖的应急来源保留。
+
+---

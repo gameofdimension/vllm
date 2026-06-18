@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Custom Sparse Attention Indexer layers."""
 
+import os
+
 import torch
 
 import vllm.envs as envs
@@ -22,6 +24,9 @@ from vllm.model_executor.layers.fp8_paged_mqa_logits_sm120 import (
     fp8_mqa_logits_sm120,
     fp8_paged_mqa_logits_sm120,
 )
+from vllm.model_executor.layers.fp8_paged_mqa_logits_triton import (
+    fp8_paged_mqa_logits_sm120_triton,
+)
 from vllm.utils.torch_utils import (
     LayerNameType,
     _encode_layer_name,
@@ -37,6 +42,12 @@ from vllm.v1.worker.workspace import current_workspace_manager
 logger = init_logger(__name__)
 
 RADIX_TOPK_WORKSPACE_SIZE = 1024 * 1024
+
+# sm_120: use the fused Triton c4 paged-MQA scorer (decode) instead of the
+# chunked-PyTorch oracle. Set VLLM_SM120_TRITON_SCORER=0 to A/B the PyTorch path.
+# Only reached in the `else` of is_deep_gemm_supported() (i.e. sm_120); SM90/100
+# take the DeepGEMM branch above and are unaffected.
+_USE_TRITON_SCORER = os.environ.get("VLLM_SM120_TRITON_SCORER", "1") == "1"
 
 # MXFP4 layout: 2 values packed per byte, ue8m0 (1-byte) scale per block of 32.
 MXFP4_BLOCK_SIZE = 32
@@ -348,7 +359,9 @@ def sparse_attn_indexer(
                     clean_logits=False,
                 )
             else:
-                logits = fp8_paged_mqa_logits_sm120(
+                scorer = (fp8_paged_mqa_logits_sm120_triton if _USE_TRITON_SCORER
+                          else fp8_paged_mqa_logits_sm120)
+                logits = scorer(
                     (padded_q_quant_cast, padded_q_scale),
                     kv_cache,
                     weights[:num_padded_tokens],

@@ -205,3 +205,37 @@ VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=cu130
 删 `.venv_reuse`（复用 fallback，不再需要），只留标准 `.venv`。`/root/native-vllm/.venv` 仍作 _C/依赖的应急来源保留。
 
 ---
+
+## [2026-06-18] Perf Phase 1 — c4 paged-MQA decode scorer → Triton（Op1）
+
+> 吞吐优化第一步：把 decode 热路径上的朴素 PyTorch c4 scorer 换成融合 Triton 核。Op1 是最热的（decode 每步都跑；1M ctx 下 oracle ~28ms/步，~2000 次串行 launch）。Op2/Op3 暂缓，本条先 checkpoint。
+
+### 改动
+- 新文件 `vllm/model_executor/layers/fp8_paged_mqa_logits_triton.py`：`_paged_mqa_logits_kernel`（`@triton.jit`）+ `fp8_paged_mqa_logits_sm120_triton`（签名与 PyTthon oracle 完全一致）。
+  - Grid `(token_tile, query_row)`；无 softmax → 无跨 tile 归约，token 维切分给足并行度。
+  - 每 program：经 `block_tables` 间接分页加载 KV（per-token 128B fp8 值 + 4B f32 scale），`qk = tl.dot(kv_fp8, q_fp8ᵀ)`（**fp8 tensor-core MMA，f32 累加**）→ relu → 加权 head 求和 → `*k_scale`；`pos >= context_len → -inf`，流式写 `logits`。
+  - 关键：**用 `tl.dot` fp8 而非逐 head 的 f32 matvec** —— 后者不用 tensor core，大 B 反而比 oracle 的 `bmm` 慢；fp8 MMA 既快又与 oracle（fp8 值的 f32 点积）数学一致。
+- 接线 `vllm/model_executor/layers/sparse_attn_indexer.py` decode 的 `else` 分支：`scorer = triton if VLLM_SM120_TRITON_SCORER(=1) else pytorch`。SM90/100 走上面的 DeepGEMM 分支，不受影响。
+- 基准 `sm120/bench/scorer_bench.py`（独立、不起服务）：构造输入 + `assert_close` 比 oracle + 计时。同时给出 Op1/Op2/Op3 的 oracle 基线。
+
+### 基线 vs Triton（Op1）
+| B | ctx | oracle(ms) | triton(ms) | speedup | max_err |
+|---|---|---|---|---|---|
+| 1 | 4k | 0.143 | 0.038 | 3.78× | 9.5e-7 |
+| 1 | 32k | 0.711 | 0.036 | 19.6× | 9.5e-7 |
+| 4 | 32k | 0.696 | 0.040 | 17.5× | 9.5e-7 |
+| 8 | 128k | 3.630 | 0.150 | 24.2× | 1.4e-6 |
+| 32 | 32k | 2.669 | 0.151 | 17.7× | 1.4e-6 |
+| 8 | **1M** | **28.43** | **1.154** | **24.65×** | 1.4e-6 |
+
+### VERIFIED
+- 正确性：triton == oracle，max_err ~1e-6（`assert_close` tol 2e-2/4e-3），所有 shape（含 1M）通过，`-inf` 掩码一致。
+- 端到端：`VLLM_SM120_TRITON_SCORER=1 vllm serve --enforce-eager`，`15*23=?` → **345**，`finish_reason=stop`。
+- 单一固定配置（`BLOCK_TOK=64`, 4 warps, 2 stages）；autotune/按 shape 绑定配置留作后续。
+
+### Op2/Op3 基线（待移植，参考）
+- Op2 prefill scorer：M=4096,N=32k → 230ms。
+- Op3 MLA prefill：Tq=2048,topk=2048 → 53ms。
+- 两者都是 prefill 成本（比 decode 更可摊销），优先级低于 Op1。
+
+---

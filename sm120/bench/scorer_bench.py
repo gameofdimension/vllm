@@ -134,7 +134,7 @@ def run_paged(shapes, compare):
         line = f"{B:>4} {ctx:>9} {fmt_ms(t_ref):>10}"
         if compare:
             try:
-                from vllm.model_executor.layers.fp8_paged_mqa_logits_triton import (
+                from vllm.model_executor.layers.fp8_mqa_logits_triton import (
                     fp8_paged_mqa_logits_sm120_triton,
                 )
                 tri = fp8_paged_mqa_logits_sm120_triton(*a)
@@ -150,16 +150,31 @@ def run_paged(shapes, compare):
 
 def run_prefill(shapes, compare):
     print("\n=== Op2: non-paged prefill c4 scorer (oracle = fp8_mqa_logits_sm120) ===")
-    print(f"{'M':>5} {'N':>7} {'oracle':>10}")
+    print(f"{'M':>5} {'N':>7} {'oracle':>10} {'triton':>10} {'speedup':>8}  {'max_err':>9}  status")
     for M, N in shapes:
         try:
             q, kv, w, ks, ke = make_prefill_inputs(M, N)
             a = ((q, None), kv, w, ks, ke, False)
-            fp8_mqa_logits_sm120(*a)
-            t = time_fn(fp8_mqa_logits_sm120, a)
-            print(f"{M:>5} {N:>7} {fmt_ms(t):>10}")
+            ref = fp8_mqa_logits_sm120(*a)
+            t_ref = time_fn(fp8_mqa_logits_sm120, a)
         except torch.OutOfMemoryError:
             print(f"{M:>5} {N:>7} {'OOM':>10}")
+            continue
+        line = f"{M:>5} {N:>7} {fmt_ms(t_ref):>10}"
+        if compare:
+            try:
+                from vllm.model_executor.layers.fp8_mqa_logits_triton import (
+                    fp8_mqa_logits_sm120_triton,
+                )
+                tri = fp8_mqa_logits_sm120_triton(*a)
+                assert_close(ref, tri, description=f"Op2 M={M} N={N}")
+                t_tri = time_fn(fp8_mqa_logits_sm120_triton, a)
+                err = (tri - ref).abs()
+                err = err[~torch.isinf(err) & ~torch.isnan(err)].max().item()
+                line += f" {fmt_ms(t_tri):>10} {t_ref / t_tri:>7.2f}x  {err:>9.2e}  OK"
+            except Exception as e:  # noqa: BLE001
+                line += f" {'-':>10} {'-':>8}  {'-':>9}  FAIL: {type(e).__name__}: {e}"
+        print(line)
 
 
 def run_mla_prefill(shapes, compare):

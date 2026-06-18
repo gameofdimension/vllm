@@ -24,7 +24,8 @@ from vllm.model_executor.layers.fp8_paged_mqa_logits_sm120 import (
     fp8_mqa_logits_sm120,
     fp8_paged_mqa_logits_sm120,
 )
-from vllm.model_executor.layers.fp8_paged_mqa_logits_triton import (
+from vllm.model_executor.layers.fp8_mqa_logits_triton import (
+    fp8_mqa_logits_sm120_triton,
     fp8_paged_mqa_logits_sm120_triton,
 )
 from vllm.utils.torch_utils import (
@@ -256,7 +257,9 @@ def sparse_attn_indexer(
                         clean_logits=False,
                     )
                 else:
-                    logits = fp8_mqa_logits_sm120(
+                    scorer = (fp8_mqa_logits_sm120_triton if _USE_TRITON_SCORER
+                              else fp8_mqa_logits_sm120)
+                    logits = scorer(
                         (q_slice_cast, q_scale_slice),
                         (k_quant_cast, k_scale_cast),
                         weights[chunk.token_start : chunk.token_end],

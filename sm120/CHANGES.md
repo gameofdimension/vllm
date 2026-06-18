@@ -239,3 +239,29 @@ VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=cu130
 - 两者都是 prefill 成本（比 decode 更可摊销），优先级低于 Op1。
 
 ---
+
+## [2026-06-18] Perf Phase 2 — c4 dense (non-paged) prefill scorer → Triton（Op2）
+
+> Op1 的同款 score 数学，KV 换成已 gather 的稠密 `[N,D]` fp8 + `[N]` f32 scale，按每个 query 的 `[ks,ke)` 变长区间打分，输出 `[M,N]`。
+
+### 改动
+- `vllm/model_executor/layers/fp8_mqa_logits_triton.py` 追加 `_dense_mqa_logits_kernel` + `fp8_mqa_logits_sm120_triton`（签名与 oracle 一致）。Grid `(kv_tile, query_row)`；稠密直读 KV（无 block_tables），`qk = tl.dot(kv_fp8, q_fp8ᵀ)` fp8 MMA → relu → 加权 head 求和 → `*k_scale`；`pos ∉ [ks,ke) → -inf`。
+- 文件从 `fp8_paged_mqa_logits_triton.py` 改名为 `fp8_mqa_logits_triton.py`（paged+dense 两个 scorer 共置；`sparse_attn_indexer.py` / bench 的 import 同步改）。
+- 接线 `sparse_attn_indexer.py` prefill 的 `else` 分支：`scorer = triton if VLLM_SM120_TRITON_SCORER(=1) else pytorch`（与 Op1 同一个 flag）。SM90/100 不受影响。
+- bench `run_prefill` 加 `--compare`：oracle vs triton 正确性 + 计时。
+
+### 基线 vs Triton（Op2）
+| M | N | oracle(ms) | triton(ms) | speedup | max_err |
+|---|---|---|---|---|---|
+| 512 | 4096 | 3.734 | 0.183 | 20.5× | 9.5e-7 |
+| 2048 | 32768 | 116.530 | 4.315 | 27.0× | 9.5e-7 |
+| 4096 | 32768 | 230.775 | 8.804 | 26.2× | 9.5e-7 |
+
+### VERIFIED
+- 正确性：triton == oracle，max_err ~1e-6，所有 shape 通过（`-inf` 掩码一致）。
+- 端到端：`VLLM_SM120_TRITON_SCORER=1 vllm serve --enforce-eager`（Op1+Op2 都走 Triton），`15*23=?`→345、`7×8`→56，正确。
+
+### 剩余
+Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTorch；是真 softmax（sink 在分母），需 flash 风格 online-softmax 核，与 Op1/Op2 的 score 数学不同。
+
+---

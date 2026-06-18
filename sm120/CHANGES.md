@@ -305,3 +305,19 @@ Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTor
 三核均门控 `is_deep_gemm_supported()` 的 else（只 sm_120 走），SM90/100 完全不变；均可经环境变量回退到 PyTtorch oracle。剩余可选优化：按 shape autotune（当前为单一配置）、长上下文 prefill 显存压测。
 
 ---
+
+## [2026-06-18] §7.1 收尾 — autotune 评估 + 长上下文压测
+
+### Autotune：评估后**不用**（保留手工固定配置）
+给 Op1 加了 `@triton.autotune`（BLOCK_TOK∈{32,64,128,256}×warps，按 ctx 分桶 key），bench 实测：
+- 32k ctx：**15.3×（退步）** vs 固定 19.6×；4k：3.0× vs 3.8×（退步）。
+- 仅 128k/1M 略好（25.5× vs 24.7×）。
+**结论**：手工挑的固定配置（Op1 BLOCK_TOK=64、Op2 BLOCK_K=64、Op3 BLOCK_K=32）对常见（短/中 ctx）decode 已近最优；autotune 的内部计时噪声导致它给常见场景挑了更慢的配置，净负面，且增加首请求 JIT 编译开销（Op3 还有 RPC 超时风险）。已**revert Op1，Op2/Op3 不再尝试**（同理）。固定配置保留。
+
+### 长上下文显存压测：通过
+- **bench 大 shape**（无 OOM、正确、加速保持）：Op2 M=8192,N=32768 → 462.7→17.8ms（25.9×）；Op3 Tq=4096,topk=2048 → 107→20.7ms（5.18×）。
+- **真实长 prompt serve**（`--enforce-eager`，三核全开）：~12,090 token prompt（320 段重复 + 一句藏在中段的密语 "ZEPHYR-42" + 提问）→ 正确召回 `ZEPHYR-42`，`finish_reason=stop`，**无 OOM、无 EngineDead**。证明集成 prefill 路径（Op2 c4 scorer + Op3 MLA prefill）在长上下文下注意力正确、显存可控。
+
+### §7.1 状态：✅ 完成（三核 Triton 化 + 收尾）。§7.2–7.5（上游化 / 正确性回归 / MoE 压测）仍未做。
+
+---

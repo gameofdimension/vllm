@@ -321,3 +321,27 @@ Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTor
 ### §7.1 状态：✅ 完成（三核 Triton 化 + 收尾）。剩余路线（HANDOFF §7）专注 v0.23.0 基线：正确性回归 / MoE 压测 / prefill 更大上下文。"上游化到 main" 已移出范围。
 
 ---
+
+## [2026-06-18] 正确性 + 服务吞吐验证（GSM8K + bench serving）
+
+### P1：GSM8K Pass@1 正确性（无需对照 SGLang）✅
+- 用 vLLM 自带 `tests/evals/gsm8k/gsm8k_eval.py`（5-shot CoT，`/v1/completions`，取末位数字精确匹配）。GSM8K 数据从 openai/grade-school-math 拉（`--retry` 重传一次补全 test.jsonl，1319 题齐全）。
+- 200 题样本：**Accuracy 0.965，invalid 0.000**。三核 Triton 全开下端到端数学推理正确，正确性确认。
+
+### P2：服务吞吐 — Triton vs torch（vLLM 自家 A/B）
+工具：`vllm bench serve`（已迁到 CLI；旧 `benchmarks/benchmark_serving.py` 是空壳）。脚本 `sm120/bench/run_perf.sh`（provider-agnostic，同一套命令打 vLLM / SGLang 的 `/v1/completions`；`--dataset-name random` 固定 in/out 长度、`--ignore-eos`、`--save-result`；两场景：A decode-heavy in128/out256×32，B long-prefill in4096/out16×64）。需 `--tokenizer /warehouse/DeepSeek-V4-Flash --tokenizer-mode deepseek_v4`（否则去 HF 拉 tokenizer 撞断网）。
+
+关键点：sm120 三核带 `@eager_break_during_capture`，**cudagraph 开着也照常 eager 跑**，所以 eager 下 Triton-vs-torch 的 delta 就是这三核优化在生产里的真实 delta（cudagraph 只抬绝对值、不改变该 delta）。
+
+结果（eager，TP8）：
+| 场景 | Triton（完成） | torch |
+|---|---|---|
+| A decode-heavy (32 请求) | 32/32 完成，out 36.5 tok/s，ITL 872ms | **1/32 完成，out 0.37 tok/s** → 随后 EngineDeadError（RPC 超时） |
+| B long-prefill (64 请求) | 64/64 完成，total 1674 tok/s | **0/64 完成** → EngineDeadError |
+
+**结论**：torch 路径在服务负载下**不可用**——PyTorch 三核太慢，前向步超过 engine RPC 超时，进程崩溃；Triton 全量跑完。叠加单元级 24.6×/26.2×/5.63×，证明 Triton 化是 sm120 可服务的必要条件，不只是提速。eager 绝对值偏低（生产应去掉 `--enforce-eager`）。
+
+### 剩余（P2 收尾）
+- vLLM-vs-SGLang 绝对吞吐：需 vLLM 生产配置（cudagraph，去掉 `--enforce-eager`，~14min 启动）的 Triton 数；SGLang 由用户跑。`run_perf.sh` 同样适用（改 `--base-url` 指向 SGLang）。
+
+---

@@ -265,3 +265,43 @@ VLLM_USE_PRECOMPILED=1 uv pip install -e . --torch-backend=cu130
 Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTorch；是真 softmax（sink 在分母），需 flash 风格 online-softmax 核，与 Op1/Op2 的 score 数学不同。
 
 ---
+
+## [2026-06-18] Perf Phase 3 — MLA prefill gathered sparse attn → Triton（Op3）
+
+> 与 Op1/Op2 不同：真 softmax（attn_sink 加在分母），每个 query 各自 gather 一组稀疏 KV（per-query indices → KV 不能跨 query tile 共享）。设计上最绕。
+
+### 踩坑路径（记录备查）
+1. **per-(query,head) program + 逐 head matvec**：4× **变慢**（0.25×）。没用 tensor core；oracle 的 batched einsum 走 cuBLAS，打不过。
+2. **per-query program + `tl.dot`（整 H）**：`OutOfResources` shared memory —— acc `[H=64, D=512]` f32 = 128KB 单块就超 sm_120 每块 99KB 上限。
+3. **H-tile（BLOCK_H=16）+ `tl.dot` + `static_range` 展开 KV 循环**：4.16×、正确。但 `static_range(0, TOPK=2048, BLOCK_K)` 把循环展开 ~32 次 → 核巨大 → **e2e 首请求 JIT 编译耗时超过 ~5min RPC 超时，EngineCore 判 EngineDeadError**（无 CUDA 错，纯 timeout）。
+4. **✅ H-tile + `tl.range`(运行时 bound) + BLOCK_K=32**：5.63×、正确、JIT 快。落定。
+
+### 最终核（`vllm/models/deepseek_v4/nvidia/flash_mla_sparse_prefill_triton.py`）
+- `_flash_mla_sparse_prefill_kernel` + `flash_mla_sparse_fwd_sm120_triton`（签名同 oracle，写 `out` in-place）。
+- Grid `(Tq, cdiv(H, BLOCK_H=16))`；每 program 取 BLOCK_H 个 head，按 query 的 indices gather 自己的 KV，flash online-softmax（exp2）：
+  - QK `q[BLOCK_H,D] · kv_g.T[D,BLOCK_K]`（bf16 MMA）→ mask → softmax
+  - AV `p[BLOCK_H,BLOCK_K] · kv_g[BLOCK_K,D]`（bf16 MMA）
+  - KV 循环用 **`tl.range`(运行时 topk)** 不展开（快编译、小核）；BLOCK_K=32 让 acc[BLOCK_H,D]+kv_g tile 进 99KB shared。
+  - sink：`e_sink = exp2(sink·LOG2E − rowmax)` 加分母（不计分子）；scalar/[H]/None 都支持。
+- 接线 `flashmla.py` `_forward_prefill` 的 else 分支：`prefill_fn = triton if VLLM_SM120_TRITON_MLA_PREFILL(=1) else pytorch`。SM90/100 不受影响。
+
+### 基线 vs Triton（Op3）
+| Tq | topk | oracle(ms) | triton(ms) | speedup | max_err |
+|---|---|---|---|---|---|
+| 512 | 512 | 3.511 | 0.608 | 5.78× | 6.1e-5 |
+| 2048 | 2048 | 53.477 | 9.496 | 5.63× | 3.0e-5 |
+
+### VERIFIED
+- 正确性：triton == oracle，max_err ~3–6e-5（bf16 精度），`-inf`/sink 语义一致。
+- 端到端：`VLLM_SM120_TRITON_SCORER=1 VLLM_SM120_TRITON_MLA_PREFILL=1 vllm serve --enforce-eager`（三核全开）→ `15*23=?`→345，`finish=stop`。
+
+### 三核总结
+| Op | 路径 | 最大 shape | 基线 | Triton | 加速 |
+|---|---|---|---|---|---|
+| Op1 | paged decode | B=8, 1M ctx | 28.4 ms | 1.15 ms | 24.6× |
+| Op2 | dense prefill | 4096×32768 | 230.8 ms | 8.8 ms | 26.2× |
+| Op3 | MLA prefill | 2048² | 53.5 ms | 9.5 ms | 5.63× |
+
+三核均门控 `is_deep_gemm_supported()` 的 else（只 sm_120 走），SM90/100 完全不变；均可经环境变量回退到 PyTtorch oracle。剩余可选优化：按 shape autotune（当前为单一配置）、长上下文 prefill 显存压测。
+
+---

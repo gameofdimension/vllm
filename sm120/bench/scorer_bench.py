@@ -179,16 +179,32 @@ def run_prefill(shapes, compare):
 
 def run_mla_prefill(shapes, compare):
     print("\n=== Op3: MLA prefill gathered sparse (oracle = flash_mla_sparse_fwd_sm120) ===")
-    print(f"{'Tq':>5} {'topk':>5} {'oracle':>10}")
+    print(f"{'Tq':>5} {'topk':>5} {'oracle':>10} {'triton':>10} {'speedup':>8}  {'max_err':>9}  status")
     for Tq, topk in shapes:
         try:
-            q, kv, idx, sms, sink, tl, out = make_mla_prefill_inputs(Tq, topk)
-            a = (q, kv, idx, sms, sink, tl, out)
-            flash_mla_sparse_fwd_sm120(*a)
-            t = time_fn(flash_mla_sparse_fwd_sm120, a)
-            print(f"{Tq:>5} {topk:>5} {fmt_ms(t):>10}")
+            q, kv, idx, sms, sink, topk_length, out = make_mla_prefill_inputs(Tq, topk)
+            a = (q, kv, idx, sms, sink, topk_length, out)
+            ref = flash_mla_sparse_fwd_sm120(*a)
+            t_ref = time_fn(flash_mla_sparse_fwd_sm120, a)
         except torch.OutOfMemoryError:
             print(f"{Tq:>5} {topk:>5} {'OOM':>10}")
+            continue
+        line = f"{Tq:>5} {topk:>5} {fmt_ms(t_ref):>10}"
+        if compare:
+            try:
+                from vllm.models.deepseek_v4.nvidia.flash_mla_sparse_prefill_triton import (
+                    flash_mla_sparse_fwd_sm120_triton,
+                )
+                ref_saved = ref.clone()
+                tri = flash_mla_sparse_fwd_sm120_triton(*a)
+                assert_close(ref_saved.to(torch.float32), tri.to(torch.float32),
+                             description=f"Op3 Tq={Tq} topk={topk}")
+                t_tri = time_fn(flash_mla_sparse_fwd_sm120_triton, a)
+                err = (tri.to(torch.float32) - ref_saved.to(torch.float32)).abs().max().item()
+                line += f" {fmt_ms(t_tri):>10} {t_ref / t_tri:>7.2f}x  {err:>9.2e}  OK"
+            except Exception as e:  # noqa: BLE001
+                line += f" {'-':>10} {'-':>8}  {'-':>9}  FAIL: {type(e).__name__}: {e}"
+        print(line)
 
 
 def main():

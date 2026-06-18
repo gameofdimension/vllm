@@ -318,6 +318,6 @@ Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTor
 - **bench 大 shape**（无 OOM、正确、加速保持）：Op2 M=8192,N=32768 → 462.7→17.8ms（25.9×）；Op3 Tq=4096,topk=2048 → 107→20.7ms（5.18×）。
 - **真实长 prompt serve**（`--enforce-eager`，三核全开）：~12,090 token prompt（320 段重复 + 一句藏在中段的密语 "ZEPHYR-42" + 提问）→ 正确召回 `ZEPHYR-42`，`finish_reason=stop`，**无 OOM、无 EngineDead**。证明集成 prefill 路径（Op2 c4 scorer + Op3 MLA prefill）在长上下文下注意力正确、显存可控。
 
-### §7.1 状态：✅ 完成（三核 Triton 化 + 收尾）。§7.2–7.5（上游化 / 正确性回归 / MoE 压测）仍未做。
+### §7.1 状态：✅ 完成（三核 Triton 化 + 收尾）。剩余路线（HANDOFF §7）专注 v0.23.0 基线：正确性回归 / MoE 压测 / prefill 更大上下文。"上游化到 main" 已移出范围。
 
 ---

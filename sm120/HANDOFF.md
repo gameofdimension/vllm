@@ -113,11 +113,12 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 
 ## 7. 待办（按优先级）
 
-1. **吞吐优化（最大）**：当前 c4 indexer scorer（2 个）+ MLA prefill 是**朴素 PyTorch 分块**实现，慢；decode MLA 是移植的 Triton（尚可）。下一步换成 Triton scorer / 融合，或评估能否复用更快的路径。功能已对，只差性能。
-2. **上游对齐 / 上游化**：本套改动针对 vLLM **0.23.0**；main 可能已分叉。按第 3 节重新对齐 main，并争取上游为一个正式的、门控的 sm_120 分支。
-3. **正确性回归**：目前只 smoke-test 了短 prompt；需对照参考（SGLang nightly 输出 / fp8 baseline）做长上下文 + eval。
-4. **MoE 运行时**：Marlin MXFP4 跑通无 NaN，但吞吐/长上下文未压测。
-5. **prefill 大上下文内存**：MLA prefill 的 `[Tq, topk, D]` PyTorch 实现在大 topk/长序列下显存偏高，必要时分块。
+1. ✅ **吞吐优化（已完成 2026-06-18）**：c4 indexer scorer（2 个）+ MLA prefill 已全部 Triton 化（Op1 24.6×、Op2 26.2×、Op3 5.63×），均门控 `is_deep_gemm_supported()` 的 else + PyTorch 回退，长上下文压测通过。详见 `CHANGES.md`。
+2. **正确性回归**：目前只 smoke-test 了短 prompt + 一次 12k 长上下文召回；需对照参考（SGLang nightly 输出 / fp8 baseline）做系统长上下文 + eval。
+3. **MoE 运行时**：Marlin MXFP4 跑通无 NaN，但吞吐/长上下文未压测。
+4. **prefill 大上下文内存**：MLA prefill 已改 Triton（流式，不再整体 materialize `[Tq,topk,D]`），但更大 topk / 更长序列仍未压测。
+
+> **范围说明（2026-06-18）**：本路线专注 **v0.23.0 基线**上的开发与优化；"上游对齐 / 上游化到 main" 已明确**移出范围**（不再追求上游化为门控分支）。
 
 ---
 

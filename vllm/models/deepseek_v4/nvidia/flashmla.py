@@ -21,6 +21,9 @@ from vllm.utils.deep_gemm import is_deep_gemm_supported
 from vllm.models.deepseek_v4.nvidia.flash_mla_sm120_triton import (
     flash_mla_sparse_decode_triton,
 )
+from vllm.models.deepseek_v4.nvidia.flash_mla_sm120_twophase import (
+    flash_mla_sparse_decode_two_phase,
+)
 from vllm.models.deepseek_v4.nvidia.flash_mla_sparse_prefill_triton import (
     flash_mla_sparse_fwd_sm120_triton,
 )
@@ -255,7 +258,7 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
                 out=output.unsqueeze(1),
             )
         else:
-            _o, _ = flash_mla_sparse_decode_triton(
+            _o, _ = flash_mla_sparse_decode_two_phase(
                 q=q,
                 k_cache=swa_cache,
                 indices=swa_indices,

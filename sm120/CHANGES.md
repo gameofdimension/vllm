@@ -436,3 +436,30 @@ rank0 GPU kernel 时间占比：
 - **正解待定**：要么 ncu（Nsight Compute）钉死是 memory- 还是 compute-bound（L2 命中率 / 反量化开销），要么对照 re-port SGLang 更新版（本地 v0.3.21 无此核，无法直接比）。这是研究级核工程，非几行调优能解决。kernel 已 revert 回原状。
 
 ---
+
+## [2026-06-22] MLA decode 两阶段重构 — **3.62× 快于旧核，1.56× 快于 SGLang**
+
+> 从 SGLang GitHub 主干发现：SGLang 新版 DSv4 decode（`nsa/triton_decode/triton_mla_kernels_decode_dsv4.py`）已弃用融合 gather-inside-attention 的旧核，改为**两阶段分离**：先 gather+dequant 到连续稠密 buffer，再做 dense attention。我们的旧核（`flash_mla_sm120_triton.py`）= SGLang 旧版融合核，正是 88.8% 瓶颈。按此架构重构。
+
+### 改动
+- 新文件 `vllm/models/deepseek_v4/nvidia/flash_mla_sm120_twophase.py`：`flash_mla_sparse_decode_two_phase`。
+  - **Phase 1**：PyTorch fancy-index gather + fp8→bf16 反量化 → 连续 `[B, topk, D]` buffer。gather **每个 batch 做一次**（所有 head 共享），消除了旧核的 H=64 倍冗余 gather。
+  - **Phase 2**：cuBLAS einsum dense attention（`einsum bhd,bvd` + softmax + `einsum bhv,bvd`）。在连续数据上跑 tensor-core GEMM。
+- `flashmla.py`：`_forward_decode` 的 sm120 分支从 `flash_mla_sparse_decode_triton` 切到 `flash_mla_sparse_decode_two_phase`。旧核保留（fallback / 参考）。
+
+### 结果（VERIFIED 2026-06-22）
+| | output tok/s | ITL | vs 旧核 | vs SGLang |
+|---|---|---|---|---|
+| **两阶段（新）** | **132.5** | **234ms** | **3.62×** | **1.56×** |
+| 融合 Triton（旧） | 36.6 | 864ms | 1× | 0.43× |
+| SGLang | 85.2 | 287ms | — | 1× |
+
+- **345 正确性验证通过**（`finish_reason=stop`）。
+- **decode 2.3× 差距不但闭合，还反超 SGLang 56%**。瓶颈（旧核 88.8%）被结构性消除。
+
+### 为什么这么快
+- Phase 1 gather 一次（H heads 共享）vs 旧核 H=64 次冗余 gather → gather 总量 ÷64。
+- Phase 2 attention 在连续数据上跑 cuBLAS einsum（coalesced + tensor core）vs 旧核在 indirect gather 循环内做 attention（uncoalesced + 无 tensor core）。
+- PyTorch fancy-index gather + cuBLAS 比 SGLang 的 Triton gather kernel 更快（可能是 cuBLAS 对 contiguous attention 的优化更成熟）。
+
+---

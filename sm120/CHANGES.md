@@ -429,4 +429,10 @@ rank0 GPU kernel 时间占比：
 - `sm120/bench/mla_decode_bench.py`：独立 MLA decode 核延迟 bench（留作后续 split-K 工作的迭代工具）。
 - autotune 已 revert 回 3 配置；kernel 逻辑不变，345 验证通过。
 
+### split-K 尝试（2026-06-22）：也无效，已 revert
+- 把核改成 grid `(B,H,S)`、每 program 处理 topk 的一段、写 partial (acc,lse)，再 `_merge_splits`（LSE 加权合并）合并 S 份。S 自适应（B·H 小时多切，~1024 目标 program 数）。
+- 实测（独立 bench）：B32H8 基本持平（0.378 vs 0.387ms），**B32H16 / B32H64 反而变慢**（+16%，S=1/2 时的 partial 分配 + PyTorch merge 开销 > 收益）→ **revert**。
+- **结论：split-K 也救不了**。该核不是并行度受限（加 program 无益），而是 **gather/dequant-bound**：① 间接 gather 即使多 program 也受限于访存发散；② fp8→f32 反量化 + ue8m0 `exp2` 的逐元素计算重；③ 虽然每 batch 的 KV 被 H 个 head 重复 gather（MQA 共享 KV），但单 batch KV（~288KB）进得了 L2，冗余 gather 多半被 L2 吃掉 → 共享 gather 也未必有收益。
+- **正解待定**：要么 ncu（Nsight Compute）钉死是 memory- 还是 compute-bound（L2 命中率 / 反量化开销），要么对照 re-port SGLang 更新版（本地 v0.3.21 无此核，无法直接比）。这是研究级核工程，非几行调优能解决。kernel 已 revert 回原状。
+
 ---

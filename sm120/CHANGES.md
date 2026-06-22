@@ -411,3 +411,22 @@ rank0 GPU kernel 时间占比：
 扩大 autotune 配置 / 调 grid / 对照 re-port SGLang 更新版 → 目标把 88.8% 这块压下来，追平 SGLang decode。这是一块独立的 Triton 调优工作。
 
 ---
+
+## [2026-06-22] MLA decode 核优化尝试 — autotune 此路不通，正解是 split-K
+
+> 落地了独立 kernel 延迟 bench（`sm120/bench/mla_decode_bench.py`），据此试了 autotune 扩配置 + H-scaling 诊断。
+
+### 尝试与结果
+- **扩 autotune**（3→8 配置：BLOCK_T{16,32}×warps{4,8,16}×stages{2,3}）：独立 bench（topk=512, H=64）2.43→**2.14ms（+12%）**；但**系统 decode bench 无增益**（34.3 vs 36.5 tok/s，噪声内）。已 **revert**（无系统收益、徒增首请求 autotune 编译开销）。
+- **H-scaling 诊断**（B=32）：ms/program 在 H=8（grid 256，TP8 分片后的真实量级）= **1.51µs**，比饱和态（H=64, 1.05µs）高 **43%** → 小 H 下 **SM 利用不足**。
+
+### 根因结论
+- 该核 **gather-memory-bound**：per-token 间接 gather 576B（448B fp8 nope + 128B bf16 rope），实测 ~8.9ms/call 比内存峰值（~25µs）慢 **~350×**（uncoalesced 间接访存）。autotune（tile/warp）动不了这个。
+- 叠加 TP8 下 H 小 → 程序数少 → SM 空转。
+- **2.3× 差距的正解 = split-K**（把 topk 维切到多个 program 换并行度，online-softmax 配 LSE merge）+ gather 优化——是一块独立的、更大的核工程，非 autotune 能解决。
+
+### 产出
+- `sm120/bench/mla_decode_bench.py`：独立 MLA decode 核延迟 bench（留作后续 split-K 工作的迭代工具）。
+- autotune 已 revert 回 3 配置；kernel 逻辑不变，345 验证通过。
+
+---

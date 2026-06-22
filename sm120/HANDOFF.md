@@ -113,10 +113,11 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 
 ## 7. 待办（按优先级）
 
-1. ✅ **吞吐优化（已完成 2026-06-18）**：c4 indexer scorer（2 个）+ MLA prefill 已全部 Triton 化（Op1 24.6×、Op2 26.2×、Op3 5.63×），均门控 `is_deep_gemm_supported()` 的 else + PyTorch 回退，长上下文压测通过。详见 `CHANGES.md`。
-2. **正确性回归**：目前只 smoke-test 了短 prompt + 一次 12k 长上下文召回；需对照参考（SGLang nightly 输出 / fp8 baseline）做系统长上下文 + eval。
+1. ✅ **吞吐优化（已完成 2026-06-18）**：c4 indexer scorer（2 个）+ MLA prefill 已全部 Triton 化（Op1 24.6×、Op2 26.2×、Op3 5.63×），均门控 `is_deep_gemm_supported()` 的 else + PyTorch 回退，长上下文压测通过。**实测：cudagraph 对 sm120 路径无增益**——三核 + MLA 经 `@eager_break_during_capture` 始终 eager，且 MoE/通信也大概率未进 graph，故 cg≈eager（decode 36.6 tok/s、prefill 1669 tok/s）。详见 `CHANGES.md`。
+2. ✅ **正确性（部分完成 2026-06-18）**：GSM8K Pass@1 **0.965**（200 题，0 invalid）。剩余：对照参考（SGLang nightly / fp8 baseline）做系统长上下文 + eval。
 3. **MoE 运行时**：Marlin MXFP4 跑通无 NaN，但吞吐/长上下文未压测。
 4. **prefill 大上下文内存**：MLA prefill 已改 Triton（流式，不再整体 materialize `[Tq,topk,D]`），但更大 topk / 更长序列仍未压测。
+5. ⏳ **decode-step profile（待办，暂缓）**：profile 一个 decode step，钉死 ~864ms ITL 的去向（MoE 专家计算 / TP all-reduce / eager-break attention / dense GEMM 各占多少）→ 定位 sm120 真正吞吐瓶颈、判断 MoE/attention 能否做成 graph-safe 以再提速。**由用户标记暂缓，后续处理。**
 
 > **范围说明（2026-06-18）**：本路线专注 **v0.23.0 基线**上的开发与优化；"上游对齐 / 上游化到 main" 已明确**移出范围**（不再追求上游化为门控分支）。
 

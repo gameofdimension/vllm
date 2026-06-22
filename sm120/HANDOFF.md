@@ -118,7 +118,7 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 3. **MoE 运行时**：Marlin MXFP4 跑通无 NaN，但吞吐/长上下文未压测。
 4. **prefill 大上下文内存**：MLA prefill 已改 Triton（流式，不再整体 materialize `[Tq,topk,D]`），但更大 topk / 更长序列仍未压测。
 5. ⏳ **decode-step profile（待办，暂缓）**：profile 一个 decode step，钉死 ~864ms ITL 的去向（MoE 专家计算 / TP all-reduce / eager-break attention / dense GEMM 各占多少）→ 定位 sm120 真正吞吐瓶颈、判断 MoE/attention 能否做成 graph-safe 以再提速。**由用户标记暂缓，后续处理。**
-6. ⏳ **清理 torch 服务分支（待办，暂缓）**：PyTorch 服务路径（`VLLM_SM120_TRITON_SCORER` / `VLLM_SM120_TRITON_MLA_PREFILL` 在 `sparse_attn_indexer.py` + `flashmla.py` 的分支）负载下不可用（EngineDeadError），是死代码。后续可移除服务分支 + 两个 flag，让服务只走 Triton；**保留** PyTorch 函数作为 bench 正确性 oracle / debug 参考。
+6. ✅ **清理 torch 服务分支（已完成 2026-06-22）**：PyTorch 三核实现负载下不可用（EngineDeadError），已从生产代码移除——serving 改 Triton-only（删 `VLLM_SM120_TRITON_*` 开关/分支、删两个生产 torch 模块）；torch 实现作为**正确性 oracle 移入 tests**（`tests/kernels/test_sm120_{mqa_logits,mla_prefill}.py`，11/11 通过）。详见 CHANGES.md。
 
 > **范围说明（2026-06-18）**：本路线专注 **v0.23.0 基线**上的开发与优化；"上游对齐 / 上游化到 main" 已明确**移出范围**（不再追求上游化为门控分支）。
 

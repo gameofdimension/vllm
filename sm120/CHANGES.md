@@ -367,3 +367,24 @@ Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTor
 - 结论：MoE + 整条 sm120 路径在吞吐与长上下文（到 64k）下健康。**顺带覆盖 §7.4**（prefill 大上下文显存：64k 无 OOM）。
 
 ---
+
+## [2026-06-22] §7.6 清理：torch oracle 移入 tests，serving 改 Triton-only
+
+> PyTorch 三核实现负载下不可用（EngineDeadError），作为 serving 回退无意义。按"保留为正确性 oracle、但挪出生产代码"的方案重构。
+
+### 改动
+- **新增单测**（torch 实现作为 oracle 内嵌其中，断言 Triton == torch）：
+  - `tests/kernels/test_sm120_mqa_logits.py`：Op1（paged decode）+ Op2（dense prefill），参数化 shape。
+  - `tests/kernels/test_sm120_mla_prefill.py`：Op3，含 attn_sink 的 None/scalar/[H] 三种分支。
+  - 阈值按"实测最大误差 × 安全倍数"定（非复用松默认）：scorers atol=1e-3（实测 ~1.4e-6，~700×）、MLA atol=1e-3/rtol=1e-2（实测 ~6e-5，~16×）；后续可压缩倍数。比较前先断言 `-inf` 掩码一致。
+- **serving 改 Triton-only**：`sparse_attn_indexer.py` + `flashmla.py` 删掉 `VLLM_SM120_TRITON_SCORER`/`VLLM_SM120_TRITON_MLA_PREFILL` 开关 + 分支 + `import os`，直接调 Triton 函数。
+- **删除生产 torch 模块**：`fp8_paged_mqa_logits_sm120.py`、`flash_mla_sparse_fwd_sm120.py`（代码已挪进 tests）。
+- `sm120/bench/scorer_bench.py`：正确性已由 pytest 覆盖，简化为 Triton-only 延迟测量（去掉 oracle/`--compare`）。
+- `sm120/bench/run_perf.sh`：注释更新（serving 只剩 Triton，对比对象是 SGLang）。
+
+### 验证
+- `pytest tests/kernels/test_sm120_{mqa_logits,mla_prefill}.py` → **11/11 通过**。
+- `vllm serve`（Triton-only，无任何 flag）→ `15*23=?` → **345**，`finish_reason=stop`。
+- 生产路径不再有 PyTorch 回退；SM90/100 仍走 DeepGEMM 分支，不受影响。
+
+---

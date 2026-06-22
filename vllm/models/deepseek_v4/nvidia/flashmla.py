@@ -3,8 +3,6 @@
 
 from typing import TYPE_CHECKING, cast
 
-import os
-
 import torch
 
 from vllm.forward_context import get_forward_context
@@ -23,9 +21,6 @@ from vllm.utils.deep_gemm import is_deep_gemm_supported
 from vllm.models.deepseek_v4.nvidia.flash_mla_sm120_triton import (
     flash_mla_sparse_decode_triton,
 )
-from vllm.models.deepseek_v4.nvidia.flash_mla_sparse_fwd_sm120 import (
-    flash_mla_sparse_fwd_sm120,
-)
 from vllm.models.deepseek_v4.nvidia.flash_mla_sparse_prefill_triton import (
     flash_mla_sparse_fwd_sm120_triton,
 )
@@ -41,12 +36,6 @@ from vllm.v1.worker.workspace import current_workspace_manager
 
 if TYPE_CHECKING:
     from vllm.v1.attention.backends.mla.sparse_swa import DeepseekSparseSWAMetadata
-
-
-# sm_120: use the fused Triton MLA prefill kernel instead of the PyTorch oracle.
-# Set VLLM_SM120_TRITON_MLA_PREFILL=0 to A/B the PyTorch path. Only reached in
-# the `else` of is_deep_gemm_supported() (i.e. sm_120); SM90/100 unaffected.
-_USE_TRITON_MLA_PREFILL = os.environ.get("VLLM_SM120_TRITON_MLA_PREFILL", "1") == "1"
 
 
 class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
@@ -402,11 +391,8 @@ class DeepseekV4FlashMLAAttention(DeepseekV4Attention):
                 )
             else:
                 # sm_120: no FlashMLA sparse prefill C kernel (SM90/100 only) —
-                # gathered sparse attention over the dense bf16 KV buffer.
-                prefill_fn = (flash_mla_sparse_fwd_sm120_triton
-                              if _USE_TRITON_MLA_PREFILL
-                              else flash_mla_sparse_fwd_sm120)
-                prefill_fn(
+                # fused Triton gathered sparse attention over the dense bf16 KV.
+                flash_mla_sparse_fwd_sm120_triton(
                     q[query_start:query_end],
                     kv.view(-1, 1, q.shape[-1]),
                     combined_indices.unsqueeze(1),

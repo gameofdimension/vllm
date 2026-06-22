@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# sm_120 perf benchmark runner — Triton vs torch (our vLLM) vs SGLang.
+# sm_120 perf benchmark runner — vLLM (Triton) vs SGLang.
 #
 # Provider-agnostic: hits an OpenAI-compatible /v1/completions endpoint, so the
-# SAME scenarios run against our vLLM server (Triton or torch) AND an SGLang
-# server. Synthetic random prompts of FIXED input/output length (reproducible,
-# content-agnostic for throughput). Each request generates exactly output_len
-# tokens (--ignore-eos).
+# SAME scenarios run against our vLLM server (serving is Triton-only on sm_120)
+# AND an SGLang server. Synthetic random prompts of FIXED input/output length
+# (reproducible, content-agnostic for throughput). Each request generates exactly
+# output_len tokens (--ignore-eos).
 #
 # Two scenarios isolate where the sm_120 Triton ops help:
 #   A) decode-heavy  (short in / long out) -> exercises Op1 (paged decode c4 scorer)
@@ -14,8 +14,7 @@
 # Usage:
 #   run_perf.sh <label> <base_url> [model_name]
 # e.g.
-#   # vLLM Triton:   bash sm120/bench/run_perf.sh triton  http://localhost:8000
-#   # vLLM torch:    bash sm120/bench/run_perf.sh torch   http://localhost:8000   # (server started with VLLM_SM120_TRITON_*=0)
+#   # vLLM (Triton): bash sm120/bench/run_perf.sh vllm   http://localhost:8000
 #   # SGLang:        bash sm120/bench/run_perf.sh sglang  http://<sglang-host>:<port> deepseek-ai/DeepSeek-V4-Flash
 set -euo pipefail
 

@@ -345,3 +345,25 @@ Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTor
 - vLLM-vs-SGLang 绝对吞吐：需 vLLM 生产配置（cudagraph，去掉 `--enforce-eager`，~14min 启动）的 Triton 数；SGLang 由用户跑。`run_perf.sh` 同样适用（改 `--base-url` 指向 SGLang）。
 
 ---
+
+## [2026-06-22] SGLang 三方对比 + §7.3 MoE/长上下文压测
+
+### SGLang 三方对比（同一份 `run_perf.sh`，两场景）
+| 场景 | vLLM-Triton(生产/cg) | SGLang | vLLM-torch |
+|---|---|---|---|
+| A decode (out tok/s / ITL) | 36.6 / 864ms | **85.2 / 287ms** | 0.37（挂） |
+| B prefill (total tok/s / TTFT) | **1669 / 77s** | 179 / 801s | 0（挂） |
+
+- **Prefill：vLLM ~9.3× 快**（Op2/Op3 Triton 化的直接收益，4096 输入下 indexer+MLA prefill 是主成本）。
+- **Decode：SGLang ~2.3× 快**（vLLM sm120 decode 864ms ITL 是弱项；短上下文下 Op1 可忽略，瓶颈在 MoE/通信/MLA-decode）。
+- **公平性**：SGLang serve 配置由用户给定，未与我严格对齐；prefill 9.3× 可能随 SGLang 配置变。decode 场景是短上下文，未压到 Op1 长上下文 24× 的优势。
+- → vLLM decode 是主要优化空间，线索见 §7.5 decode-step profile。
+
+### §7.3 MoE（Marlin MXFP4）吞吐 + 长上下文压测 — 全过
+- **吞吐/稳定性**：sustained decode（in256/out512，32 请求，16k decode tokens）**36.4 tok/s 稳定不退化**，全 32/32 完成，**无 NaN / 无 EngineDead**。
+- **长上下文显存**：needle 测试到 **64k 无 OOM**（64k prefill 22.8s）。
+- **长上下文正确性**：needle 召回 12k/16k/**64k** 通过；32k 单次失败（"ZEPHYR-7B"）**非单调 → 判为单样本噪声**（sparse-attention 召回本身有随机性），全程无 NaN/garbage。
+- **长生成质量**：300 词作文连贯准确、按要求收尾、无重复退化。
+- 结论：MoE + 整条 sm120 路径在吞吐与长上下文（到 64k）下健康。**顺带覆盖 §7.4**（prefill 大上下文显存：64k 无 OOM）。
+
+---

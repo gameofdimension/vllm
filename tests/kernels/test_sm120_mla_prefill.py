@@ -9,7 +9,8 @@ production tree originally; once serving became Triton-only it was moved here as
 a correctness oracle.
 
 Outputs are bf16; the internal math is f32 in both, differing only in exp vs
-exp2 / accumulation order. Measured max abs err ~6e-5; atol=1e-3 ~= 16x margin.
+exp2 / accumulation order. Measured max abs err ~6e-5; atol=1e-4 (rtol=0) is a
+~1.7x margin.
 """
 import pytest
 import torch
@@ -20,7 +21,7 @@ from vllm.models.deepseek_v4.nvidia.flash_mla_sparse_prefill_triton import (
 
 H_MLA, D_MLA = 64, 512
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
-MLA_ATOL, MLA_RTOL = 1e-3, 1e-2  # measured abs err ~6e-5 on bf16 output
+MLA_ATOL, MLA_RTOL = 1e-4, 0.0  # measured abs err ~6e-5 on bf16 output; rtol=0 -> pure atol
 
 
 # --------------------------------------------------------------------------- #

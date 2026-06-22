@@ -12,7 +12,7 @@ correctness oracles (they are too slow to serve under load).
 
 Both sides run on identical fp8 inputs, so the only difference is MMA /
 accumulation rounding (exp vs exp2, fp8 tl.dot vs fp8->f32 dot). Measured max
-abs err is ~1.4e-6 on f32 logits; atol=1e-3 is a ~700x margin (tighten later).
+abs err is ~1.4e-6 on f32 logits; atol=5e-6 (rtol=0) is a ~3.5x margin.
 """
 from typing import Any
 
@@ -27,7 +27,7 @@ from vllm.model_executor.layers.fp8_mqa_logits_triton import (
 
 H_IDX, D_IDX, BLOCK = 64, 128, 64
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
-SCORER_ATOL, SCORER_RTOL = 1e-3, 1e-3  # measured abs err ~1.4e-6
+SCORER_ATOL, SCORER_RTOL = 5e-6, 0.0  # measured abs err ~1.4e-6; rtol=0 -> pure atol
 
 
 # --------------------------------------------------------------------------- #

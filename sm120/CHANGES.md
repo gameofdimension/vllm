@@ -388,3 +388,26 @@ Op3（MLA prefill gathered sparse attention，baseline 53ms）仍为朴素 PyTor
 - 生产路径不再有 PyTorch 回退；SM90/100 仍走 DeepGEMM 分支，不受影响。
 
 ---
+
+## [2026-06-22] §7.5 decode-step profile — 瓶颈定位（MLA decode 核）
+
+> 用 vLLM torch profiler（`--profiler torch`，eager 下 kernel 级可见，`/start_profile`+`/stop_profile` 窗口捕获 batch-32 decode）解析 rank0 trace。**推翻了之前"MoE/通信是 decode 瓶颈"的假设。**
+
+### 结论：decode 瓶颈 = MLA decode Triton 核
+rank0 GPU kernel 时间占比：
+| kernel | 占比 | 说明 |
+|---|---|---|
+| **`_tiled_sparse_decode_kernel`（MLA decode，移植自 SGLang）** | **88.8%** | ~760ms/step（~61 层 × ~12.5ms/层）|
+| nccl all-reduce | 4.5% | TP 通信 |
+| `_paged_mqa_logits_kernel`（Op1 decode scorer） | 1.1% | 我们优化过的，不是瓶颈 |
+| MoE marlin | 0.3% | |
+| dense GEMM / norm / quant | <1% | |
+
+- **不是** Op1（1.1%）、**不是** MoE（0.3%）、**不是**通信（4.5%）——是 **MLA decode 核**（88.8%）。
+- 这解释了 cudagraph 无增益（该核 `@eager_break_during_capture`，始终 eager）；也定位了 vLLM decode 比 SGLang 慢 2.3× 的根因。
+- 该核 autotune 配置极简（仅 3 个：BLOCK_T 16/32，warps 4/8），有明显调优空间。
+
+### 下一步（优化 MLA decode 核）
+扩大 autotune 配置 / 调 grid / 对照 re-port SGLang 更新版 → 目标把 88.8% 这块压下来，追平 SGLang decode。这是一块独立的 Triton 调优工作。
+
+---

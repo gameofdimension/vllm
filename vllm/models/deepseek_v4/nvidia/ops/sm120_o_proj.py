@@ -58,6 +58,20 @@ def _sm120_wo_a_bf16(wo_a: nn.Module) -> torch.Tensor:
     if scale is None:
         scale = getattr(wo_a, "weight_scale", None)
     bs = getattr(wo_a, "weight_block_size", [128, 128])
+    # Our fp8 checkpoint stores wo_a as BF16; vLLM re-quantizes it to FP8 on
+    # load but leaves a corrupt FLT_MAX placeholder scale (a properly quantized
+    # fp8 weight spans ±448, but here w_absmax ~0.2 = the raw bf16 values). In
+    # that case the fp8 values ARE the true weight values, so use them as-is.
+    scale_corrupt = (
+        scale is not None and scale.dtype == torch.float32
+        and bool(torch.isfinite(scale).all())
+        and float(scale.abs().max().item()) > 1.0e4
+    )
+    w_unquantized = float(wf.abs().max().item()) < 10.0  # proper fp8 spans ~448
+    if scale_corrupt or w_unquantized:
+        out = wf.to(torch.bfloat16)
+        wo_a._sm120_bf16 = out
+        return out
     if (
         scale is not None
         and scale.dtype == torch.float32
@@ -104,4 +118,7 @@ def sm120_o_proj(
     o = torch.einsum(
         "tgd,grd->tgr", o.float(), wo_a_bf16.float()
     ).to(torch.bfloat16)
-    return wo_b(o.reshape(T, -1))
+    out = wo_b(o.reshape(T, -1))
+    if isinstance(out, tuple):
+        out = out[0]
+    return out

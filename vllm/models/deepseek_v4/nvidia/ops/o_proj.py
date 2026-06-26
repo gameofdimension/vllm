@@ -6,6 +6,7 @@ import torch.nn as nn
 from vllm.models.deepseek_v4.common.ops import fused_inv_rope_fp8_quant
 from vllm.platforms import current_platform
 from vllm.utils.deep_gemm import fp8_einsum
+from vllm.models.deepseek_v4.nvidia.ops.sm120_o_proj import sm120_o_proj  # sm_120 re-export
 
 
 def compute_fp8_einsum_recipe() -> tuple[tuple[int, int, int], bool]:

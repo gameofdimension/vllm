@@ -21,7 +21,9 @@ from vllm.models.deepseek_v4.common.ops import (
 from vllm.models.deepseek_v4.nvidia.ops.o_proj import (
     compute_fp8_einsum_recipe,
     deep_gemm_fp8_o_proj,
+    sm120_o_proj,
 )
+from vllm.utils.deep_gemm import is_deep_gemm_supported
 from vllm.models.deepseek_v4.sparse_mla import (
     DeepseekV4FlashMLABackend,
     DeepseekV4FlashMLAMetadata,
@@ -83,19 +85,31 @@ class DeepseekV4FlashInferMLAAttention(DeepseekV4Attention):
         return 64 if num_heads <= 64 else 128
 
     def _o_proj(self, o: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        return deep_gemm_fp8_o_proj(
+        if is_deep_gemm_supported():
+            return deep_gemm_fp8_o_proj(
+                o,
+                positions,
+                self.rotary_emb.cos_sin_cache,
+                self.wo_a,
+                self.wo_b,
+                n_groups=self.n_local_groups,
+                heads_per_group=self.n_local_heads // self.n_local_groups,
+                nope_dim=self.nope_head_dim,
+                rope_dim=self.rope_head_dim,
+                o_lora_rank=self.o_lora_rank,
+                einsum_recipe=self._einsum_recipe,
+                tma_aligned_scales=self._tma_aligned_scales,
+            )
+        # sm_120 (no DeepGEMM): bf16 inv-RoPE + grouped einsum + wo_b.
+        return sm120_o_proj(
             o,
             positions,
             self.rotary_emb.cos_sin_cache,
             self.wo_a,
             self.wo_b,
             n_groups=self.n_local_groups,
-            heads_per_group=self.n_local_heads // self.n_local_groups,
-            nope_dim=self.nope_head_dim,
             rope_dim=self.rope_head_dim,
             o_lora_rank=self.o_lora_rank,
-            einsum_recipe=self._einsum_recipe,
-            tma_aligned_scales=self._tma_aligned_scales,
         )
 
     def __init__(self, *args, **kwargs) -> None:

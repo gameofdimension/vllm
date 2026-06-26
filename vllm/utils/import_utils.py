@@ -485,5 +485,18 @@ def has_fbgemm_gpu() -> bool:
 
 
 def has_cutedsl() -> bool:
-    """Whether the optional `cutelass` package is available."""
-    return _has_module("cutlass")
+    """Whether the optional `cutlass` package is available AND usable.
+
+    cutedsl kernels emit Hopper+ (sm_90) PTX (bf16x2 mul, cvt.bf16.f16, TMA);
+    they fail ptxas on Ada (sm_89). Only advertise cutedsl on sm_90+.
+    """
+    if not _has_module("cutlass"):
+        return False
+    try:
+        from vllm.platforms import current_platform
+        cap = current_platform.get_device_capability()
+        if cap is not None and cap.major < 9:
+            return False
+    except Exception:
+        pass
+    return True
